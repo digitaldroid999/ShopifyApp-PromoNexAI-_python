@@ -1,0 +1,37 @@
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.24.0
+
+# Scraping & browser
+playwright==1.53.0
+beautifulsoup4==4.12.2
+requests==2.31.0
+fake-useragent==1.4.0
+
+# Async & HTTP
+aiofiles==23.2.1
+aiohttp==3.9.1
+python-multipart==0.0.6
+httpx==0.28.1
+websockets==15.0.1
+brotli==1.1.0
+
+# Data & validation
+pydantic==2.12.5
+python-dotenv==1.0.0
+
+# Storage & database
+supabase==2.18.1
+motor==3.3.2
+pymongo==4.6.1
+
+# Image & video
+Pillow==11.3.0
+opencv-python==4.13.0.92
+numpy==2.4.2
+
+# AI / APIs
+openai==2.17.0
+google-genai==1.62.0
+google-auth==2.48.0
+elevenlabs==2.35.0
