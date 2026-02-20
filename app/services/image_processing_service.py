@@ -456,119 +456,41 @@ class ImageProcessingService:
         
         return ao
 
-
-    def composite_images(
-        self,
-        background_url: str,
-        overlay_url: str,
-        scene_id: str,
-        user_id: str,
-        position: Tuple[int, int] = (0, 0),
-        resize_overlay: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Composite two images together (overlay on top of background).
-
-        Args:
-            background_url: URL of the background image
-            overlay_url: URL of the overlay image (typically background-removed product)
-            scene_id: Scene ID for organizing files and updating database
-            user_id: User ID for organizing files
-            position: (x, y) position to place overlay on background (default: centered)
-            resize_overlay: Whether to resize overlay to fit background (default: True)
-
-        Returns:
-            Dict containing:
-                - success (bool): Whether the operation succeeded
-                - image_url (str): None (use composite_images_to_public_folder for a URL)
-                - error (str): Error message (if failed)
-        """
-        temp_bg_path = None
-        temp_overlay_path = None
-        temp_output_path = None
-
-        try:
-            logger.info(f"Starting image compositing for scene {scene_id}")
-
-            # Download both images
-            logger.info("Downloading background image...")
-            temp_bg_path = self._download_image_from_url(background_url)
-
-            logger.info("Downloading overlay image...")
-            temp_overlay_path = self._download_image_from_url(overlay_url)
-
-            # Composite the images
-            logger.info("Compositing images...")
-            temp_output_path = self._composite_images_locally(
-                background_path=temp_bg_path,
-                overlay_path=temp_overlay_path,
-                position=position,
-                resize_overlay=resize_overlay,
-                shadow_angle=135,
-                shadow_distance=30,
-                enable_color_matching=True,
-                enable_histogram_matching=True,
-                enable_rim_light=True,
-                brightness_adjust=1.0,
-                contrast_adjust=1.05,
-            )
-
-            logger.info("Image compositing completed successfully.")
-
-            return {
-                'success': True,
-                'image_url': None,
-                'error': None
-            }
-
-        except Exception as e:
-            error_msg = f"Image compositing failed: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return {
-                'success': False,
-                'image_url': None,
-                'error': error_msg
-            }
-
-        finally:
-            # Clean up temporary files
-            for temp_path in [temp_bg_path, temp_overlay_path, temp_output_path]:
-                if temp_path and os.path.exists(temp_path):
-                    try:
-                        os.unlink(temp_path)
-                        logger.debug(f"Cleaned up temporary file: {temp_path}")
-                    except Exception as cleanup_error:
-                        logger.warning(f"Failed to clean up temporary file {temp_path}: {cleanup_error}")
-
     def composite_images_to_public_folder(
         self,
         background_url: str,
         overlay_url: str,
+        user_id: str,
+        scene_id: str,
         position: Tuple[int, int] = (0, 0),
         resize_overlay: bool = True,
     ) -> Dict[str, Any]:
         """
-        Composite two images and save the result to the Shopify app public folder.
-        Returns a URL path for the frontend: /composited_images/{image_name}.
+        Composite two images and save to public folder under composited_images/{user_id}/{scene_id}/{file_name}.
+        Returns relative URL: composited_images/{user_id}/{scene_id}/{file_name}.
 
         Args:
             background_url: URL of the background image
             overlay_url: URL of the overlay image (e.g. product with transparent background)
+            user_id: Shopify user ID (string form for path)
+            scene_id: Scene ID for organizing files
             position: (x, y) position to place overlay (0,0 = auto-center)
             resize_overlay: Whether to resize overlay to fit background
 
         Returns:
-            Dict with success, image_url (e.g. "/composited_images/composited-xxx.png"), error
+            Dict with success, image_url (e.g. "composited_images/{user_id}/{scene_id}/{file_name}"), error
         """
         temp_bg_path = None
         temp_overlay_path = None
         temp_output_path = None
-        output_dir = getattr(settings, "COMPOSITED_IMAGES_OUTPUT_DIR", None)
-        if not output_dir:
-            return {"success": False, "image_url": None, "error": "COMPOSITED_IMAGES_OUTPUT_DIR not configured"}
-        output_dir = Path(output_dir)
+        base_dir = getattr(settings, "PUBLIC_OUTPUT_BASE", None) or getattr(settings, "COMPOSITED_IMAGES_OUTPUT_DIR", None)
+        if not base_dir:
+            return {"success": False, "image_url": None, "error": "PUBLIC_OUTPUT_BASE not configured"}
+        base_dir = Path(base_dir)
+        # Save under composited_images/{user_id}/{scene_id}/{file_name}
+        output_dir = base_dir / "composited_images" / user_id / scene_id
         try:
-            logger.info("Compositing images to Shopify public folder")
+            logger.info("Compositing images to Shopify public folder: %s/%s/...", user_id, scene_id)
             temp_bg_path = self._download_image_from_url(background_url)
             temp_overlay_path = self._download_image_from_url(overlay_url)
             temp_output_path = self._composite_images_locally(
@@ -585,15 +507,16 @@ class ImageProcessingService:
                 contrast_adjust=1.05,
             )
             output_dir.mkdir(parents=True, exist_ok=True)
-            image_name = f"composited-{uuid.uuid4().hex[:12]}.png"
-            dest_path = output_dir / image_name
+            file_name = f"composited-{uuid.uuid4().hex[:12]}.png"
+            dest_path = output_dir / file_name
             shutil.copy2(temp_output_path, str(dest_path))
-            image_url = f"/composited_images/{image_name}"
-            logger.info(f"Saved composited image to {dest_path}, URL: {image_url}")
+            # Return relative URL without leading slash: composited_images/{user_id}/{scene_id}/{file_name}
+            image_url = f"composited_images/{user_id}/{scene_id}/{file_name}"
+            logger.info("Saved composited image to %s, URL: %s", dest_path, image_url)
             return {"success": True, "image_url": image_url, "error": None}
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Composite to public folder failed: {error_msg}", exc_info=True)
+            logger.error("Composite to public folder failed: %s", error_msg, exc_info=True)
             return {"success": False, "image_url": None, "error": error_msg}
         finally:
             for temp_path in [temp_bg_path, temp_overlay_path, temp_output_path]:
