@@ -3,9 +3,11 @@ Audio Generation Service for creating AI-powered audio content.
 Handles test audio generation, speed analysis, script generation, and final audio creation.
 """
 
+import os
 import uuid
 import asyncio
 import base64
+from pathlib import Path
 from elevenlabs.types import CharacterAlignmentResponseModel
 import openai
 import requests
@@ -158,61 +160,55 @@ class AudioGenerationService:
 
             total_duration = 24  # Used for validation logging
 
-            # Step 3: Generate final audio using ElevenLabs from the provided script
+            # Step 3: Generate final audio using ElevenLabs (returns bytes + subtitle timing, no Supabase upload)
             logger.info("Generating final audio from provided script...")
             final_audio_result = asyncio.run(self._generate_final_audio_with_info(request.voice_id, audio_script, request.user_id))
             if not final_audio_result:
                 raise Exception("Failed to generate final audio")
 
-            # final_audio_url is the public URL from Supabase storage
-            final_audio_url = final_audio_result["url"]
-            upload_info = final_audio_result["upload_info"]
+            audio_data = final_audio_result["audio_data"]
             subtitle_timing = final_audio_result.get("subtitle_timing", [])
-            
-            logger.info(f"Audio uploaded successfully. Public URL: {final_audio_url}")
-            
+
+            # Step 4: Save to public folder and get relative URL
+            final_audio_url = self._save_audio_to_public(audio_data, request.user_id, request.short_id)
+            if not final_audio_url:
+                raise Exception("Failed to save audio to public folder")
+
+            logger.info(f"Audio saved to public folder. URL: {final_audio_url}")
+
+            upload_info = {"path": final_audio_url, "size": len(audio_data), "mimeType": "audio/mpeg"}
+
             # Step 5: Deduct credits for successful audio generation
             credit_result = asyncio.run(self._deduct_credits_for_audio_generation(request, audio_script, request.short_id))
-            
+
             # Step 6: Generate SRT content from subtitle timing
             srt_content = self._generate_srt_content(subtitle_timing)
-            
-            # Step 7: Get signed URL for duration calculation (signed URLs work for both public and private buckets)
-            signed_audio_url = asyncio.run(self._get_signed_url_from_supabase_url(final_audio_url))
-            if not signed_audio_url:
-                logger.warning("Failed to get signed URL, using public URL for duration calculation")
-                signed_audio_url = final_audio_url
 
-            # Step 8: Calculate duration using signed URL
-            duration = asyncio.run(self._calculate_audio_duration(signed_audio_url))
+            # Step 7: Calculate duration from bytes (no URL fetch)
+            duration = self._calculate_audio_duration_from_bytes(audio_data)
             logger.info(f"Actual audio duration: {duration:.2f} seconds (target: {total_duration} seconds, difference: {duration - total_duration:.2f}s)")
-            
-            # Validate duration doesn't exceed target
+
             if duration > total_duration:
                 logger.error(f"⚠️ AUDIO TOO LONG! Generated audio is {duration:.2f}s, exceeding target of {total_duration}s by {duration - total_duration:.2f}s")
-                logger.error(f"This audio may not fit properly in the video. Consider regenerating with stricter word count.")
             elif duration > total_duration * 0.95:
-                logger.warning(f"⚠️ Audio duration ({duration:.2f}s) is very close to target ({total_duration}s). Only {total_duration - duration:.2f}s buffer remaining.")
+                logger.warning(f"⚠️ Audio duration ({duration:.2f}s) is very close to target ({total_duration}s).")
             else:
-                logger.info(f"✅ Audio duration ({duration:.2f}s) is within target ({total_duration}s). Buffer: {total_duration - duration:.2f}s")
-            
-            # Step 9: Save to Supabase audio_info table with PUBLIC URL (not signed URL)
-            # The public URL is stable and doesn't expire, so it's stored in the database
-            # Signed URLs are generated on-demand during merge/download phase
-            logger.info(f"Saving public URL to database: {final_audio_url}")
+                logger.info(f"✅ Audio duration ({duration:.2f}s) is within target ({total_duration}s).")
+
+            # Step 8: Save to audio_info table (if Supabase is used)
+            logger.info(f"Saving audio URL to database: {final_audio_url}")
             asyncio.run(self._save_audio_to_supabase_audio_info(
-                request, final_audio_url, audio_script, words_per_minute, 
+                request, final_audio_url, audio_script, words_per_minute,
                 duration, upload_info, credit_result, srt_content, subtitle_timing
             ))
 
             logger.info(f"Successfully generated audio for short {request.short_id}")
-            
-            # Return the result directly with signed URL
+
             return AudioGenerationResponse(
                 voice_id=request.voice_id,
                 user_id=request.user_id,
                 short_id=request.short_id,
-                audio_url=signed_audio_url,
+                audio_url=final_audio_url,
                 script=audio_script,
                 words_per_minute=words_per_minute,
                 duration=duration,
@@ -549,19 +545,14 @@ Description: {short_description}"""
 
 
     async def _generate_final_audio_with_info(self, voice_id: str, script: str, user_id: str) -> Optional[Dict[str, Any]]:
-        """Generate final audio using ElevenLabs with timestamps and return URL, upload info, and timing data"""
+        """Generate final audio using ElevenLabs with timestamps. Returns audio bytes and subtitle timing (no Supabase upload)."""
         try:
             if not self.elevenlabs_client:
                 logger.error("ElevenLabs client not initialized")
                 return None
 
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return None
-
             logger.info(f"Generating final audio with timestamps for voice {voice_id}")
 
-            # Generate audio using ElevenLabs with timestamps
             response = self.elevenlabs_client.text_to_speech.convert_with_timestamps(
                 voice_id=voice_id,
                 output_format=settings.ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
@@ -569,31 +560,53 @@ Description: {short_description}"""
                 model_id=settings.ELEVENLABS_DEFAULT_MODEL
             )
 
-            # Convert audio data to bytes
-            # response.audio_base64 is a single base64-encoded string
-            logger.info(f"Received audio response, decoding base64 audio data")
+            logger.info("Received audio response, decoding base64 audio data")
             audio_data = base64.b64decode(response.audio_base_64)
             logger.info(f"Total audio data size: {len(audio_data)} bytes")
 
-            # Upload to Supabase storage
-            upload_info = await self._upload_audio_to_supabase(audio_data, voice_id, user_id, "generated-audio")
-            if not upload_info:
-                logger.error("Failed to upload final audio to Supabase storage")
-                return None
-
-            # Process timing data for subtitles
             subtitle_timing = self._process_subtitle_timing(response.alignment, script)
 
-            logger.info(f"Successfully generated and uploaded final audio for voice {voice_id}")
+            logger.info(f"Successfully generated final audio for voice {voice_id}")
             return {
-                "url": upload_info["url"],
-                "upload_info": upload_info,
+                "audio_data": audio_data,
                 "subtitle_timing": subtitle_timing
             }
 
         except Exception as e:
             logger.error(f"Error generating final audio: {e}")
-            raise  # Propagate so caller can return a clear message (e.g. payment_issue)
+            raise
+
+    def _save_audio_to_public(self, audio_data: bytes, user_id: str, short_id: str) -> Optional[str]:
+        """Save audio to public folder. Returns relative URL: generated_audio/{user_id}/{short_id}/{file_name}"""
+        try:
+            public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
+            if not public_base:
+                logger.error("PUBLIC_OUTPUT_BASE not configured")
+                return None
+            out_dir = Path(public_base) / "generated_audio" / user_id / short_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            file_name = f"{uuid.uuid4().hex[:12]}.mp3"
+            dest_path = out_dir / file_name
+            dest_path.write_bytes(audio_data)
+            relative_url = f"generated_audio/{user_id}/{short_id}/{file_name}"
+            logger.info(f"Saved audio to public folder: {relative_url}")
+            return relative_url
+        except Exception as e:
+            logger.error(f"Error saving audio to public folder: {e}")
+            return None
+
+    def _calculate_audio_duration_from_bytes(self, audio_data: bytes) -> float:
+        """Calculate audio duration in seconds from MP3 bytes."""
+        try:
+            duration = self._parse_mp3_duration(audio_data)
+            if duration > 0:
+                return duration
+            file_size_bytes = len(audio_data)
+            bytes_per_second = (128 * 1000) / 8
+            return file_size_bytes / bytes_per_second
+        except Exception as e:
+            logger.error(f"Error calculating audio duration from bytes: {e}")
+            return 0.0
 
     def _generate_srt_content(self, subtitle_timing: List[Dict[str, Any]]) -> str:
         """Generate SRT format content from subtitle timing segments"""

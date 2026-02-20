@@ -58,11 +58,14 @@ class Settings:
     CLEANUP_INTERVAL_HOURS: int = _int(os.getenv("CLEANUP_INTERVAL_HOURS", "24"))
     CLEANUP_DAYS_THRESHOLD: int = _int(os.getenv("CLEANUP_DAYS_THRESHOLD", "2"))
 
-    # Shopify app public folder (relative to this project root); composited images saved here
-    COMPOSITED_IMAGES_OUTPUT_DIR: str = os.getenv(
-        "COMPOSITED_IMAGES_OUTPUT_DIR",
-        os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "promo-nex-ai", "public", "composited_images")),
+    # Shopify app public folder (relative to this project root). All generated files go under this path.
+    _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    PUBLIC_OUTPUT_BASE: str = os.getenv(
+        "PUBLIC_OUTPUT_BASE",
+        os.path.normpath(os.path.join(_project_root, "..", "ShopifyApp-PromoNexAI-", "public")),
     )
 
 
 settings = Settings()
+# Derived paths under PUBLIC_OUTPUT_BASE
+settings.COMPOSITED_IMAGES_OUTPUT_DIR = os.path.normpath(os.path.join(settings.PUBLIC_OUTPUT_BASE, "composited_images"))

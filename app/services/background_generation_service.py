@@ -19,7 +19,6 @@ from pathlib import Path
 from datetime import datetime, timezone
 from app.models import TaskStatus
 from app.config import settings
-from app.utils.supabase_utils import supabase_manager
 from app.utils.vertex_utils import vertex_manager
 from app.logging_config import get_logger
 
@@ -242,35 +241,19 @@ class BackgroundGenerationService:
             
             logger.info(f"[Task {task_id}] ✓ Background generated successfully (Vertex AI Imagen 4.0)")
             logger.info(f"[Task {task_id}]   → Local file path: {generated_image_path}")
-            
-            # Step 3: Upload to Supabase (90% progress)
-            logger.info(f"[Task {task_id}] Step 3/3: Uploading to Supabase...")
-            self._update_task(task_id, current_step='Uploading to storage', progress=90)
-            final_image_url = self._upload_to_supabase(generated_image_path, user_id)
-            
+
+            # Step 3: Save to public folder (no Supabase)
+            short_id = self.tasks.get(task_id, {}).get('short_id') or scene_id or 'unknown'
+            self._update_task(task_id, current_step='Saving to public folder', progress=90)
+            final_image_url = self._save_background_to_public(generated_image_path, user_id, short_id)
+
             if not final_image_url:
-                raise Exception("Failed to upload image to storage")
-            
-            logger.info(f"[Task {task_id}] ✓ Image upload completed")
-            
-            # Cleanup temp files
+                raise Exception("Failed to save image to public folder")
+
+            logger.info(f"[Task {task_id}] ✓ Image saved to public folder")
+
             self._cleanup_temp_files([generated_image_path])
-            
-            # Update scene in database if scene_id provided
-            if scene_id:
-                logger.info(f"[Task {task_id}] Updating scene {scene_id} in database...")
-                try:
-                    import asyncio
-                    asyncio.run(supabase_manager.update_record(
-                        table='video_scenes',
-                        filters={'id': scene_id},
-                        updates={'image_url': final_image_url, 'updated_at': datetime.now(timezone.utc).isoformat()}
-                    ))
-                    logger.info(f"[Task {task_id}] ✓ Scene updated in database")
-                except Exception as e:
-                    logger.warning(f"[Task {task_id}] Failed to update scene in database: {e}")
-            
-            # Mark task as completed (100% progress)
+
             self._update_task(
                 task_id,
                 status=TaskStatus.COMPLETED,
@@ -278,7 +261,7 @@ class BackgroundGenerationService:
                 current_step='Completed',
                 progress=100
             )
-            
+
             logger.info("=" * 80)
             logger.info(f"✅ [Task {task_id}] BACKGROUND GENERATION COMPLETED SUCCESSFULLY!")
             logger.info(f"Final Image URL: {final_image_url}")
@@ -691,62 +674,27 @@ GENERATE UNIVERSAL PRODUCT BACKDROP DESCRIPTION NOW:"""
             logger.error(f"  → Error type: {type(e).__name__}")
             return None
 
-    def _upload_to_supabase(self, image_path: str, user_id: str) -> Optional[str]:
+    def _save_background_to_public(self, image_path: str, user_id: str, short_id: str) -> Optional[str]:
         """
-        Upload the generated image to Supabase storage
-        
-        Args:
-            image_path: Path to the image file to upload
-            user_id: User ID for organizing uploads
-            
-        Returns:
-            Public URL of the uploaded image or None if failed
+        Save the generated image to public folder.
+        Returns relative URL: generated_images/{user_id}/{short_id}/{file_name}
         """
         try:
-            logger.info("  → Checking Supabase connection...")
-            if not supabase_manager.is_connected():
-                logger.info("  → Supabase not connected, establishing connection...")
-                supabase_manager.ensure_connection()
-                logger.info("  → Supabase connection established")
-            else:
-                logger.info("  → Supabase already connected")
-            
-            # Read the image file
-            logger.info(f"  → Reading image file from: {image_path}")
-            with open(image_path, 'rb') as f:
-                image_data = f.read()
-            
-            file_size = len(image_data)
-            logger.info(f"  → File size to upload: {file_size} bytes")
-            
-            # Generate unique filename
-            image_uuid = uuid.uuid4()
-            filename = f"background-images/{user_id}/{image_uuid}.png"
-            logger.info(f"  → Target storage path: {filename}")
-            logger.info(f"  → Storage bucket: generated-content")
-            
-            # Upload to Supabase storage
-            logger.info("  → Uploading to Supabase storage...")
-            supabase_manager.client.storage.from_('generated-content').upload(
-                path=filename,
-                file=image_data,
-                file_options={'content-type': 'image/png'}
-            )
-            logger.info("  → Upload successful")
-            
-            # Get public URL
-            logger.info("  → Retrieving public URL...")
-            public_url = supabase_manager.client.storage.from_('generated-content').get_public_url(filename)
-            
-            logger.info("  → Public URL generated successfully")
-            logger.info(f"  → Public URL: {public_url}")
-            
-            return public_url
-
+            import shutil
+            public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
+            if not public_base:
+                logger.error("  → PUBLIC_OUTPUT_BASE not configured")
+                return None
+            out_dir = Path(public_base) / "generated_images" / user_id / short_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            file_name = f"background-{uuid.uuid4().hex[:12]}.png"
+            dest_path = out_dir / file_name
+            shutil.copy2(image_path, str(dest_path))
+            relative_url = f"generated_images/{user_id}/{short_id}/{file_name}"
+            logger.info(f"  → Saved to public folder: {relative_url}")
+            return relative_url
         except Exception as e:
-            logger.error(f"  → Supabase upload failed!")
-            logger.error(f"  → Error type: {type(e).__name__}")
-            logger.error(f"  → Error message: {str(e)}")
+            logger.error(f"  → Save to public failed: {e}")
             return None
 
     def _get_temp_dir(self) -> Path:

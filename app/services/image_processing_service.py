@@ -1008,6 +1008,7 @@ class ImageProcessingService:
                     background_video_url,
                     scene_id,
                     user_id,
+                    short_id,
                     scale,
                     position,
                     duration,
@@ -1043,6 +1044,7 @@ class ImageProcessingService:
         background_video_url: str,
         scene_id: str,
         user_id: str,
+        short_id: str,
         scale: float,
         position: str,
         duration: Optional[int],
@@ -1053,7 +1055,7 @@ class ImageProcessingService:
         Updates task status as it progresses.
         """
         try:
-            logger.info("[Scene2] TASK picked up | task_id=%s scene_id=%s", task_id, scene_id)
+            logger.info("[Scene2] TASK picked up | task_id=%s scene_id=%s short_id=%s", task_id, scene_id, short_id)
             logger.info("🔄 Processing image merge task %s", task_id)
 
             # Update task to processing
@@ -1065,6 +1067,7 @@ class ImageProcessingService:
                 background_video_url=background_video_url,
                 scene_id=scene_id,
                 user_id=user_id,
+                short_id=short_id or scene_id,
                 scale=scale,
                 position=position,
                 duration=duration,
@@ -1162,36 +1165,37 @@ class ImageProcessingService:
         background_video_url: str,
         scene_id: str,
         user_id: str,
+        short_id: Optional[str] = None,
         scale: float = 0.4,
         position: str = "center",
         duration: Optional[int] = None,
         add_animation: bool = True,
-        add_shadow: bool = True,  # New parameter
-        shadow_blur_radius: int = 25,  # New parameter for shadow blur
-        shadow_offset: Tuple[int, int] = (15, 15)  # New parameter for shadow offset
+        add_shadow: bool = True,
+        shadow_blur_radius: int = 25,
+        shadow_offset: Tuple[int, int] = (15, 15)
     ) -> Dict[str, Any]:
         """
         Merge a product image (without background) with a background video using OpenCV.
+        Saves the result to public folder: generated_videos/{user_id}/{short_id}/scene2/{file_name}.
         
         Args:
-            product_image_url: URL of the product image (should be PNG with transparent background)
+            product_image_url: URL of the product image (PNG with transparent background)
             background_video_url: URL of the background video
-            scene_id: Scene ID for organizing files and updating database
+            scene_id: Scene ID for organizing files
             user_id: User ID for organizing files
-            scale: Scale of product relative to video width (default: 0.4 = 40%)
+            short_id: Short ID for path (defaults to scene_id if not provided)
+            scale: Scale of product relative to video width (default: 0.4)
             position: Position of product ("center", "top", "bottom", "left", "right")
             duration: Optional duration in seconds (if None, uses full video duration)
             add_animation: Whether to add zoom and floating animations
             add_shadow: Whether to add shadow effect to the product
-            shadow_blur_radius: Blur radius for shadow softening (default: 25)
-            shadow_offset: Shadow offset as (x, y) tuple in pixels (default: (15, 15))
+            shadow_blur_radius: Blur radius for shadow (default: 25)
+            shadow_offset: Shadow offset as (x, y) tuple (default: (15, 15))
         
         Returns:
-            Dict containing:
-                - success (bool): Whether the operation succeeded
-                - video_url (str): None (Supabase removed)
-                - error (str): Error message (if failed)
+            Dict with success, video_url (e.g. "generated_videos/{user_id}/{short_id}/scene2/{file_name}"), error
         """
+        short_id = short_id or scene_id
         temp_product_path = None
         temp_video_path = None
         temp_output_path = None
@@ -1263,15 +1267,23 @@ class ImageProcessingService:
             logger.info("[Scene2] Step 4/6: Merging product with video (OpenCV) - done | path=%s", temp_output_path)
             logger.info("✅ Video merge completed: %s", temp_output_path)
 
-            # Step 5 & 6: Upload/DB removed (Supabase no longer used)
-            video_url = None
-            logger.info("[Scene2] Step 5/6: Video merge done (upload skipped)")
-            logger.info("[Scene2] Step 6/6: Database update skipped")
+            # Step 5: Save to public folder and build response URL
+            public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
+            if not public_base:
+                return {'success': False, 'video_url': None, 'error': 'PUBLIC_OUTPUT_BASE not configured'}
+            out_dir = Path(public_base) / "generated_videos" / user_id / short_id / "scene2"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            file_name = f"scene2-{uuid.uuid4().hex[:12]}.mp4"
+            dest_path = out_dir / file_name
+            shutil.copy2(temp_output_path, str(dest_path))
+            video_url = f"generated_videos/{user_id}/{short_id}/scene2/{file_name}"
+            logger.info("[Scene2] Step 5/6: Saved to public folder | url=%s", video_url)
+            logger.info("[Scene2] Step 6/6: Done")
 
             print("\n" + "="*80)
             print("✅ SCENE 2 GENERATION COMPLETED SUCCESSFULLY")
             print("="*80)
-            logger.info("[Scene2] COMPLETED | scene_id=%s", scene_id)
+            logger.info("[Scene2] COMPLETED | scene_id=%s | video_url=%s", scene_id, video_url)
             logger.info("🎉 Image-video merge completed successfully for scene %s", scene_id)
             print()
             
