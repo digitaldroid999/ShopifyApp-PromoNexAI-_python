@@ -20,7 +20,7 @@ if exist "requirements.txt" (
 
 REM Start the server (entry point is main.py in project root)
 echo Starting API server...
-echo API will be available at: http://localhost:8000 (or PORT from .env)
+echo API will be available at: http://localhost:8050 (or PORT from .env)
 echo.
 python main.py
 
