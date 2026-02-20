@@ -485,14 +485,23 @@ class ImageProcessingService:
         temp_output_path = None
         base_dir = getattr(settings, "PUBLIC_OUTPUT_BASE", None) or getattr(settings, "COMPOSITED_IMAGES_OUTPUT_DIR", None)
         if not base_dir:
+            logger.error("Composite step 0: PUBLIC_OUTPUT_BASE not configured")
             return {"success": False, "image_url": None, "error": "PUBLIC_OUTPUT_BASE not configured"}
         base_dir = Path(base_dir)
         # Save under composited_images/{user_id}/{scene_id}/{file_name}
         output_dir = base_dir / "composited_images" / user_id / scene_id
         try:
-            logger.info("Compositing images to Shopify public folder: %s/%s/...", user_id, scene_id)
+            logger.info(
+                "Composite step 1: start — user_id=%s scene_id=%s position=%s resize_overlay=%s",
+                user_id, scene_id, position, resize_overlay,
+            )
+            logger.info("Composite step 2: downloading background from %s", background_url)
             temp_bg_path = self._download_image_from_url(background_url)
+            logger.info("Composite step 2: background saved to %s", temp_bg_path)
+            logger.info("Composite step 3: downloading overlay from %s", overlay_url)
             temp_overlay_path = self._download_image_from_url(overlay_url)
+            logger.info("Composite step 3: overlay saved to %s", temp_overlay_path)
+            logger.info("Composite step 4: compositing images locally (shadow, rim light, etc.)")
             temp_output_path = self._composite_images_locally(
                 background_path=temp_bg_path,
                 overlay_path=temp_overlay_path,
@@ -506,13 +515,16 @@ class ImageProcessingService:
                 brightness_adjust=1.0,
                 contrast_adjust=1.05,
             )
+            logger.info("Composite step 4: local composite output at %s", temp_output_path)
+            logger.info("Composite step 5: ensuring output dir exists: %s", output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             file_name = f"composited-{uuid.uuid4().hex[:12]}.png"
             dest_path = output_dir / file_name
+            logger.info("Composite step 6: copying to public folder %s", dest_path)
             shutil.copy2(temp_output_path, str(dest_path))
             # Return relative URL without leading slash: composited_images/{user_id}/{scene_id}/{file_name}
             image_url = f"composited_images/{user_id}/{scene_id}/{file_name}"
-            logger.info("Saved composited image to %s, URL: %s", dest_path, image_url)
+            logger.info("Composite step 7: done — saved to %s, URL: %s", dest_path, image_url)
             return {"success": True, "image_url": image_url, "error": None}
         except Exception as e:
             error_msg = str(e)
@@ -547,16 +559,23 @@ class ImageProcessingService:
         """
         ENHANCED compositing with all professional features
         """
-        
+        logger.info(
+            "Composite local: inputs background=%s overlay=%s position=%s resize_overlay=%s",
+            background_path, overlay_path, position, resize_overlay,
+        )
+
         # -----------------------------
         # 1️⃣ Load images
         # -----------------------------
+        logger.info("Composite local step 1: loading background and overlay images")
         background = Image.open(background_path).convert("RGB")
         overlay = Image.open(overlay_path).convert("RGBA")
+        logger.info("Composite local step 1: loaded bg %sx%s, overlay %sx%s", background.width, background.height, overlay.width, overlay.height)
 
         # -----------------------------
         # 2️⃣ Resize background without distortion
         # -----------------------------
+        logger.info("Composite local step 2: resizing background to %sx%s", landscape_width, landscape_height)
         bg_ratio = background.width / background.height
         target_ratio = landscape_width / landscape_height
 
@@ -580,6 +599,7 @@ class ImageProcessingService:
         # -----------------------------
         # 3️⃣ Resize overlay proportionally
         # -----------------------------
+        logger.info("Composite local step 3: resizing overlay (resize_overlay=%s)", resize_overlay)
         if resize_overlay:
             max_width = int(landscape_width * 0.6)
             max_height = int(landscape_height * 0.6)
@@ -592,16 +612,17 @@ class ImageProcessingService:
         # -----------------------------
         # 🆕 3.5️⃣ COLOR & LIGHTING MATCHING
         # -----------------------------
+        logger.info("Composite local step 3.5: color and lighting matching")
         if enable_color_matching:
-            print("🎨 Matching color temperature...")
+            logger.info("Composite local: matching color temperature")
             overlay = self._match_color_temperature(overlay, background, strength=0)
         
         if enable_histogram_matching:
-            print("🎨 Matching histogram...")
+            logger.info("Composite local: matching histogram")
             overlay = self._match_histogram(overlay, background, strength=0.1)
         
         if brightness_adjust != 1.0 or contrast_adjust != 1.0:
-            print(f"💡 Adjusting brightness ({brightness_adjust}) & contrast ({contrast_adjust})...")
+            logger.info("Composite local: adjusting brightness=%s contrast=%s", brightness_adjust, contrast_adjust)
             overlay = self._adjust_brightness_contrast(
                 overlay, 
                 brightness=brightness_adjust, 
@@ -612,6 +633,7 @@ class ImageProcessingService:
         # -----------------------------
         # 4️⃣ Smooth overlay edges
         # -----------------------------
+        logger.info("Composite local step 4: smoothing overlay edges")
         r, g, b, a = overlay.split()
         a = a.filter(ImageFilter.GaussianBlur(1))
         overlay = Image.merge("RGBA", (r, g, b, a))
@@ -620,7 +642,7 @@ class ImageProcessingService:
         # 🆕 4.5️⃣ ADD RIM LIGHTING
         # -----------------------------
         if enable_rim_light:
-            print("✨ Adding rim lighting...")
+            logger.info("Composite local step 4.5: adding rim lighting")
             overlay = self._add_rim_light(
                 overlay, 
                 light_angle=shadow_angle - 180,  # Opposite of shadow
@@ -631,6 +653,7 @@ class ImageProcessingService:
         # -----------------------------
         # 5️⃣ Determine shadow opacity based on background brightness
         # -----------------------------
+        logger.info("Composite local step 5: computing shadow opacity from background brightness")
         bg_gray = np.mean(np.array(background.convert("L")))
         if bg_gray > 180:
             shadow_opacity = 0.25
@@ -642,12 +665,15 @@ class ImageProcessingService:
         # -----------------------------
         # 6️⃣ Center overlay if no position provided
         # -----------------------------
+        logger.info("Composite local step 6: placing overlay at position %s", position)
         if position == (0, 0):
             position = (
                 (landscape_width - overlay.width) // 2,
                 (landscape_height - overlay.height) // 2
             )
+            logger.info("Composite local step 6: auto-centered overlay at %s", position)
 
+        logger.info("Composite local step 6.5: creating base composited canvas and cast shadow")
         composited = Image.new("RGBA", background.size)
         composited.paste(background, (0, 0))
 
@@ -656,7 +682,7 @@ class ImageProcessingService:
         # -----------------------------
         # 🆕 6.5️⃣ DIRECTIONAL CAST SHADOW (canvas = background size so shadow isn't cropped by overlay)
         # -----------------------------
-        print(f"🌑 Creating cast shadow (angle: {shadow_angle}°, distance: {shadow_distance}px)...")
+        logger.info("Composite local: creating cast shadow angle=%s distance=%s", shadow_angle, shadow_distance)
         cast_shadow, shadow_offset = self._create_cast_shadow(
             overlay,
             angle=shadow_angle,
@@ -676,7 +702,7 @@ class ImageProcessingService:
         # -----------------------------
         # 7️⃣ Contact shadow (canvas = background size so shadow isn't cropped by overlay)
         # -----------------------------
-        print("🌑 Creating contact shadow...")
+        logger.info("Composite local step 7: creating contact shadow")
         contact_shadow = Image.new("RGBA", overlay.size, (0, 0, 0, 255))
         contact_shadow.putalpha(alpha)
         new_h = int(overlay.height * 0.15)
@@ -693,7 +719,7 @@ class ImageProcessingService:
         # -----------------------------
         # 🆕 7.5️⃣ IMPROVED AMBIENT OCCLUSION (canvas = background size so shadow isn't cropped by overlay)
         # -----------------------------
-        print("🌑 Adding ambient occlusion...")
+        logger.info("Composite local step 7.5: adding ambient occlusion")
         ao = self._create_improved_ao(overlay, intensity=0.4)
         ao_position = (position[0], position[1] + int(overlay.height * 0.4))
         ao_resized = ao.resize((overlay.width, int(overlay.height * 0.6)), Image.Resampling.LANCZOS)
@@ -706,7 +732,7 @@ class ImageProcessingService:
         # 9️⃣ Optional reflection
         # -----------------------------
         if add_reflection:
-            print("✨ Adding reflection...")
+            logger.info("Composite local step 9: adding reflection")
             reflection = overlay.copy().transpose(Image.FLIP_TOP_BOTTOM)
             r, g, b, a = reflection.split()
             a = ImageEnhance.Brightness(a).enhance(0.15)
@@ -718,11 +744,13 @@ class ImageProcessingService:
         # -----------------------------
         # 🔟 Paste overlay
         # -----------------------------
+        logger.info("Composite local step 10: pasting overlay onto canvas")
         composited.paste(overlay, position, overlay)
 
         # -----------------------------
         # 1️⃣1️⃣ Adaptive brightness / color blending
         # -----------------------------
+        logger.info("Composite local step 11: adaptive tint and grain")
         avg_color = np.mean(np.array(background.convert("RGB")).reshape(-1, 3), axis=0)
         tint_layer = Image.new("RGBA", composited.size,
                             (int(avg_color[0]), int(avg_color[1]), int(avg_color[2]), 10))
@@ -742,8 +770,7 @@ class ImageProcessingService:
         # -----------------------------
         output_path = str(self._temp_dir / f"composited-{uuid.uuid4()}.png")
         final.save(output_path, "PNG", optimize=True)
-        
-        print(f"✅ Composite saved: {output_path}")
+        logger.info("Composite local step 13: saved to %s", output_path)
 
         return output_path
 

@@ -41,6 +41,18 @@ def composite(request: CompositeRequest) -> ImageCompositeResponse:
     Composite two images and save to public folder under composited_images/{user_id}/{scene_id}/{file_name}.
     Returns relative URL: composited_images/{user_id}/{scene_id}/{file_name}.
     """
+    # Log request state for debugging
+    request_state = {
+        "overlay_url": request.overlay_url,
+        "background_url": request.background_url,
+        "scene_id": request.scene_id,
+        "user_id": request.user_id,
+        "position_x": request.position_x,
+        "position_y": request.position_y,
+        "resize_overlay": request.resize_overlay,
+    }
+    logger.info("POST /image/composite request state: %s", request_state)
+
     result = image_processing_service.composite_images_to_public_folder(
         background_url=request.background_url,
         overlay_url=request.overlay_url,
@@ -50,6 +62,7 @@ def composite(request: CompositeRequest) -> ImageCompositeResponse:
         resize_overlay=request.resize_overlay if request.resize_overlay is not None else True,
     )
     if result["success"]:
+        logger.info("POST /image/composite success: image_url=%s", result["image_url"])
         return ImageCompositeResponse(
             success=True,
             image_url=result["image_url"],
@@ -57,6 +70,7 @@ def composite(request: CompositeRequest) -> ImageCompositeResponse:
             message="Images composited and saved to public folder",
             created_at=datetime.now(timezone.utc),
         )
+    logger.warning("POST /image/composite failed: error=%s", result.get("error"))
     return ImageCompositeResponse(
         success=False,
         image_url=None,
