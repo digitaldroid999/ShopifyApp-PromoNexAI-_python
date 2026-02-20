@@ -1226,7 +1226,7 @@ class ImageProcessingService:
             file_name = f"scene2-{uuid.uuid4().hex[:12]}.mp4"
             dest_path = out_dir / file_name
             shutil.copy2(temp_output_path, str(dest_path))
-            video_url = f"generated_videos/{user_id}/{short_id}/scene2/{file_name}"
+            video_url = f"/generated_videos/{user_id}/{short_id}/scene2/{file_name}"
             logger.info("[Scene2] Step 5/6: Saved to public folder | url=%s", video_url)
             logger.info("[Scene2] Step 6/6: Done")
 
