@@ -911,7 +911,10 @@ class ImageProcessingService:
         scale: float = 0.4,
         position: str = "center",
         duration: Optional[int] = None,
-        add_animation: bool = True
+        add_animation: bool = True,
+        add_shadow: bool = True,
+        shadow_blur_radius: int = 25,
+        shadow_offset: Tuple[int, int] = (15, 15),
     ) -> Dict[str, Any]:
         """
         Start an async image-video merge task (Scene2 generation).
@@ -927,6 +930,9 @@ class ImageProcessingService:
             position: Product position on video
             duration: Optional duration in seconds
             add_animation: Whether to add animations
+            add_shadow: Whether to add shadow to product
+            shadow_blur_radius: Shadow blur radius
+            shadow_offset: Shadow offset (x, y)
             
         Returns:
             Dict with task_id, status, and message
@@ -962,7 +968,10 @@ class ImageProcessingService:
                     scale,
                     position,
                     duration,
-                    add_animation
+                    add_animation,
+                    add_shadow,
+                    shadow_blur_radius,
+                    shadow_offset,
                 ),
                 daemon=True,
                 name=f"image_merge_{task_id}"
@@ -998,7 +1007,10 @@ class ImageProcessingService:
         scale: float,
         position: str,
         duration: Optional[int],
-        add_animation: bool
+        add_animation: bool,
+        add_shadow: bool = True,
+        shadow_blur_radius: int = 25,
+        shadow_offset: Tuple[int, int] = (15, 15),
     ):
         """
         Background worker that processes the image-video merge.
@@ -1021,7 +1033,10 @@ class ImageProcessingService:
                 scale=scale,
                 position=position,
                 duration=duration,
-                add_animation=add_animation
+                add_animation=add_animation,
+                add_shadow=add_shadow,
+                shadow_blur_radius=shadow_blur_radius,
+                shadow_offset=shadow_offset,
             )
             
             # Update task based on result
@@ -1221,7 +1236,7 @@ class ImageProcessingService:
             public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
             if not public_base:
                 return {'success': False, 'video_url': None, 'error': 'PUBLIC_OUTPUT_BASE not configured'}
-            out_dir = Path(public_base) / "generated_videos" / user_id / short_id / "scene2"
+            out_dir = Path(public_base) / "/generated_videos" / user_id / short_id / "scene2"
             out_dir.mkdir(parents=True, exist_ok=True)
             file_name = f"scene2-{uuid.uuid4().hex[:12]}.mp4"
             dest_path = out_dir / file_name

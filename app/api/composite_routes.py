@@ -1,6 +1,6 @@
 """Image composite endpoint: composite two images and save to Shopify app public folder."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List
 
@@ -72,6 +72,83 @@ def merge_video(request: MergeVideoRequest) -> MergeVideoResponse:
         success=result["success"],
         video_url=result.get("video_url"),
         error=result.get("error"),
+    )
+
+
+# ---- Async / polling (merge-video) ----
+
+class MergeVideoStartResponse(BaseModel):
+    """Response when starting an async merge-video task."""
+    task_id: str
+    status: str
+    scene_id: str
+    user_id: str
+    message: str
+    created_at: str
+
+
+class MergeVideoTaskStatusResponse(BaseModel):
+    """Response for polling merge-video task status."""
+    task_id: str
+    status: str
+    scene_id: Optional[str] = None
+    user_id: Optional[str] = None
+    message: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    error_message: Optional[str] = None
+    video_url: Optional[str] = None
+
+
+@router.post("/merge-video/start", response_model=MergeVideoStartResponse)
+def merge_video_start(request: MergeVideoRequest) -> MergeVideoStartResponse:
+    """
+    Start an async image-video merge task (Scene2). Returns immediately with task_id.
+    Poll GET /image/merge-video/tasks/{task_id} for status and video_url when completed.
+    """
+    short_id = request.short_id or request.scene_id
+    result = image_processing_service.start_image_merge_task(
+        product_image_url=request.product_image_url,
+        background_video_url=request.background_video_url,
+        scene_id=request.scene_id,
+        user_id=request.user_id,
+        short_id=short_id,
+        scale=request.scale,
+        position=request.position,
+        duration=request.duration,
+        add_animation=request.add_animation,
+        add_shadow=request.add_shadow,
+        shadow_blur_radius=request.shadow_blur_radius,
+        shadow_offset=tuple(request.shadow_offset) if request.shadow_offset else (15, 15),
+    )
+    return MergeVideoStartResponse(
+        task_id=result["task_id"],
+        status=result["status"],
+        scene_id=result["scene_id"],
+        user_id=result["user_id"],
+        message=result["message"],
+        created_at=result["created_at"],
+    )
+
+
+@router.get("/merge-video/tasks/{task_id}", response_model=MergeVideoTaskStatusResponse)
+def merge_video_task_status(task_id: str) -> MergeVideoTaskStatusResponse:
+    """
+    Get status of an async merge-video task. When status is completed, video_url is set.
+    """
+    task = image_processing_service.get_task_status(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    return MergeVideoTaskStatusResponse(
+        task_id=task["task_id"],
+        status=task["status"],
+        scene_id=task.get("scene_id"),
+        user_id=task.get("user_id"),
+        message=task.get("message"),
+        created_at=task.get("created_at"),
+        updated_at=task.get("updated_at"),
+        error_message=task.get("error_message"),
+        video_url=task.get("video_url"),
     )
 
 
