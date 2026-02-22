@@ -23,7 +23,6 @@ from app.models import (
     AudioScriptGenerationResponse,
 )
 from app.utils.mongodb_manager import mongodb_manager
-from app.utils.supabase_utils import supabase_manager
 from app.config import settings
 from app.logging_config import get_logger
 
@@ -85,13 +84,9 @@ class AudioGenerationService:
 
             logger.info(f"Generating audio script for short {request.short_id} with voice {request.voice_id} by user {request.user_id}")
 
-            # Step 1: Get target language from shorts table
-            target_language = asyncio.run(self._get_target_language(request.short_id))
-            if not target_language:
-                logger.warning(f"Could not fetch target_language for short_id {request.short_id}, defaulting to en-US")
-                target_language = "en-US"
+            target_language = request.target_language or "en-US"
 
-            # Step 2: Get or generate test audio and calculate speed
+            # Step 1: Get or generate test audio and calculate speed
             test_audio_result = asyncio.run(self._get_or_generate_test_audio(request.voice_id, request.user_id, target_language))
             if not test_audio_result:
                 raise Exception("Failed to get or generate test audio")
@@ -108,11 +103,8 @@ class AudioGenerationService:
                 words_per_minute = 150.0
             test_text = test_audio_result.get("text", "")
 
-            # Step 3: Get short description (use defaults if Supabase unavailable or no row)
-            short_info = asyncio.run(self._get_short_description(request.short_id))
-            if not short_info:
-                logger.warning(f"No short found for short_id {request.short_id}, using default product info")
-                short_info = {"title": "Product", "description": "Amazing product for your audience."}
+            # Step 2: Build product info from request (product_description sent by client)
+            short_info = {"title": "Product", "description": request.product_description or "Amazing product for your audience."}
 
             total_duration = 24
             style = "trendy-influencer-vlog"
@@ -150,12 +142,9 @@ class AudioGenerationService:
             logger.info(f"Starting audio generation for short {request.short_id} with voice {request.voice_id} by user {request.user_id}")
             audio_script = request.script
 
-            # Step 1: Get target language (for test audio if needed)
-            target_language = asyncio.run(self._get_target_language(request.short_id))
-            if not target_language:
-                target_language = "en-US"
+            target_language = "en-US"
 
-            # Step 2: Get or generate test audio and calculate speed (for metadata and duration validation)
+            # Step 1: Get or generate test audio and calculate speed (for metadata and duration validation)
             test_audio_result = asyncio.run(self._get_or_generate_test_audio(request.voice_id, request.user_id, target_language))
             if not test_audio_result:
                 raise Exception("Failed to get or generate test audio")
@@ -206,13 +195,6 @@ class AudioGenerationService:
             else:
                 logger.info(f"✅ Audio duration ({duration:.2f}s) is within target ({total_duration}s).")
 
-            # Step 8: Save to audio_info table (if Supabase is used)
-            logger.info(f"Saving audio URL to database: {final_audio_url}")
-            asyncio.run(self._save_audio_to_supabase_audio_info(
-                request, final_audio_url, audio_script, words_per_minute,
-                duration, upload_info, credit_result, srt_content, subtitle_timing
-            ))
-
             logger.info(f"Successfully generated audio for short {request.short_id}")
 
             return AudioGenerationResponse(
@@ -238,48 +220,6 @@ class AudioGenerationService:
                     "Complete the latest invoice at ElevenLabs to continue usage."
                 )
             raise Exception(f"Audio generation failed: {str(e)}")
-
-    async def _get_target_language(self, short_id: str) -> Optional[str]:
-        """Get target_language from shorts table based on short_id"""
-        try:
-            if not supabase_manager.is_connected():
-                supabase_manager.ensure_connection()
-            
-            # Get target_language from shorts table
-            result = supabase_manager.client.table('shorts').select('target_language').eq('id', short_id).execute()
-            
-            if result.data and len(result.data) > 0:
-                target_language = result.data[0].get('target_language', 'en-US')
-                logger.info(f"Found target_language '{target_language}' for short_id {short_id}")
-                return target_language
-            else:
-                logger.warning(f"No shorts record found for short_id: {short_id}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error fetching target_language for short_id {short_id}: {e}")
-            return None
-
-    async def _get_short_description(self, short_id: str) -> Optional[Dict[str, Any]]:
-        """Get short title and description from shorts table"""
-        try:
-            if not supabase_manager.is_connected():
-                supabase_manager.ensure_connection()
-            
-            # Get title and description from shorts table
-            result = supabase_manager.client.table('shorts').select('title, description').eq('id', short_id).execute()
-            
-            if result.data and len(result.data) > 0:
-                short_data = result.data[0]
-                logger.info(f"Found short info for short_id {short_id}: title='{short_data.get('title', 'N/A')}'")
-                return short_data
-            else:
-                logger.warning(f"No shorts record found for short_id: {short_id}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error fetching short description for short_id {short_id}: {e}")
-            return None
 
     async def _get_or_generate_test_audio(self, voice_id: str, user_id: str, language: str = "en-US") -> Optional[Dict[str, Any]]:
         """Check MongoDB for existing test audio or generate it. Uses local public folder (no Supabase upload)."""
@@ -307,64 +247,13 @@ class AudioGenerationService:
                         return {"audio_bytes": audio_bytes, "text": text}
                     logger.warning("Cached test audio file not found on disk, will regenerate")
                 else:
-                    # Legacy: Supabase URL — try signed URL for backward compatibility
-                    signed_url = await self._get_signed_url_from_supabase_url(audio_url)
-                    if signed_url:
-                        return {"url": signed_url, "text": text}
-                    logger.warning("Failed to get signed URL for cached test audio, will regenerate")
+                    logger.warning("Cached test audio has non-local URL, will regenerate")
 
             logger.info(f"Generating new test audio for voice {voice_id} with language {language}")
             return await self._generate_test_audio(voice_id, user_id, language)
 
         except Exception as e:
             logger.error(f"Error getting or generating test audio: {e}")
-            return None
-
-    async def _get_signed_url_from_supabase_url(self, supabase_url: str) -> Optional[str]:
-        """Extract path from Supabase URL and get signed URL"""
-        try:
-            # Extract bucket and path from Supabase URL
-            # URL format: https://project.supabase.co/storage/v1/object/public/bucket/path
-            if '/storage/v1/object/public/' in supabase_url:
-                # Extract bucket and path from public URL
-                parts = supabase_url.split('/storage/v1/object/public/')
-                if len(parts) == 2:
-                    bucket_and_path = parts[1]
-                    bucket_path_parts = bucket_and_path.split('/', 1)
-                    if len(bucket_path_parts) == 2:
-                        bucket = bucket_path_parts[0]
-                        path = bucket_path_parts[1]
-                        
-                        # Get signed URL using Supabase helper
-                        signed_url_result = await supabase_manager.get_file_url(bucket, path, expires_in=3600)
-                        if signed_url_result:
-                            # Extract the actual URL from the result (could be dict or string)
-                            if isinstance(signed_url_result, dict):
-                                # Try different possible keys for the URL
-                                signed_url = (signed_url_result.get('signedURL') or 
-                                            signed_url_result.get('signedUrl') or 
-                                            signed_url_result.get('url'))
-                                if signed_url:
-                                    logger.info(f"Successfully converted Supabase URL to signed URL")
-                                    return signed_url
-                                else:
-                                    logger.error(f"Could not extract URL from signed URL result: {signed_url_result}")
-                                    return None
-                            elif isinstance(signed_url_result, str):
-                                logger.info(f"Successfully converted Supabase URL to signed URL")
-                                return signed_url_result
-                            else:
-                                logger.error(f"Unexpected signed URL result type: {type(signed_url_result)}")
-                                return None
-                        else:
-                            logger.error("Failed to get signed URL from Supabase helper")
-                            return None
-            
-            logger.error(f"Could not parse Supabase URL: {supabase_url}")
-            return None
-
-        except Exception as e:
-            logger.error(f"Error converting Supabase URL to signed URL: {e}")
             return None
 
     def _save_test_audio_to_public(self, audio_data: bytes, user_id: str, voice_id: str, language: str) -> Optional[str]:
@@ -919,151 +808,6 @@ Description: {short_description}"""
                 "new_balance": None,
                 "error": str(e)
             }
-
-    async def _save_failed_audio_to_supabase(self, request: AudioGenerationRequest, audio_url: str, script: str, words_per_minute: float, duration: float, upload_info: Optional[Dict[str, Any]] = None, credit_result: Optional[Dict[str, Any]] = None, error_message: str = "") -> bool:
-        """Save failed audio info to Supabase audio_info table"""
-        try:
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return False
-
-            # Check if audio_info record already exists for this short
-            existing_audio = await self._get_existing_audio_info(request.short_id)
-            
-            audio_data = {
-                "user_id": request.user_id,
-                "short_id": request.short_id,
-                "voice_id": request.voice_id,
-                "generated_audio_url": audio_url if audio_url else None,
-                "status": "failed",
-                "metadata": {
-                    "script": script if script else None,
-                    "words_per_minute": words_per_minute if words_per_minute else None,
-                    "duration": duration if duration else None,
-                    "storage_path": upload_info.get("path") if upload_info else None,
-                    "file_size": upload_info.get("size") if upload_info else None,
-                    "mime_type": upload_info.get("mimeType") if upload_info else "audio/mpeg",
-                    "uuid": upload_info.get("uuid") if upload_info else None,
-                    "credit_info": credit_result if credit_result else None,
-                    "error": error_message,
-                    "failed_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-
-            if existing_audio:
-                # Update existing record with failed status
-                logger.info(f"Updating existing audio_info record with failed status for short {request.short_id}")
-                result = supabase_manager.client.table('audio_info').update(audio_data).eq('short_id', request.short_id).execute()
-                
-                if result.data:
-                    logger.info(f"Successfully updated audio_info record with failed status for short {request.short_id}")
-                    return True
-                else:
-                    logger.error(f"Failed to update audio_info record with failed status for short {request.short_id}")
-                    return False
-            else:
-                # Create new record with failed status
-                logger.info(f"Creating new audio_info record with failed status for short {request.short_id}")
-                result = supabase_manager.client.table('audio_info').insert(audio_data).execute()
-                
-                if result.data:
-                    logger.info(f"Successfully created audio_info record with failed status for short {request.short_id}")
-                    return True
-                else:
-                    logger.error(f"Failed to create audio_info record with failed status for short {request.short_id}")
-                    return False
-
-        except Exception as e:
-            logger.error(f"Error saving failed audio info to Supabase: {e}")
-            return False
-
-    async def _save_audio_to_supabase_audio_info(self, request: AudioGenerationRequest, audio_url: str, script: str, words_per_minute: float, duration: float, upload_info: Optional[Dict[str, Any]] = None, credit_result: Optional[Dict[str, Any]] = None, srt_content: str = "", subtitles: Optional[List[Dict[str, Any]]] = None) -> bool:
-        """Save generated audio info to Supabase audio_info table"""
-        try:
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return False
-
-            # Check if audio_info record already exists for this short
-            existing_audio = await self._get_existing_audio_info(request.short_id)
-            
-            # Build metadata according to the new format
-            metadata = {
-                "modelId": settings.ELEVENLABS_DEFAULT_MODEL,
-                "file_size": upload_info.get("size") if upload_info else 0,
-                "mime_type": "audio/mp3",
-                "textLength": len(script),
-                "srt_content": srt_content,
-                "outputFormat": settings.ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
-                "storage_path": upload_info.get("path") if upload_info else None,
-                "creditDeducted": credit_result.get("success", False) if credit_result else False,
-                "originalTextLength": len(script)
-            }
-            
-            # Add newBalance if available from credit result
-            if credit_result and credit_result.get("new_balance") is not None:
-                metadata["newBalance"] = credit_result.get("new_balance")
-            
-            # audio_url may be relative path (generated_audio/{user_id}/{short_id}/{file_name}) or legacy Supabase URL
-            logger.info(f"Saving audio URL to audio_info table: {audio_url[:100]}...")
-            
-            audio_data = {
-                "user_id": request.user_id,
-                "short_id": request.short_id,
-                "voice_id": request.voice_id,
-                "generated_audio_url": audio_url,  # Public URL stored in database
-                "status": "completed",
-                "metadata": metadata,
-                "subtitles": subtitles if subtitles else []
-            }
-
-            if existing_audio:
-                # Update existing record
-                logger.info(f"Updating existing audio_info record for short {request.short_id}")
-                result = supabase_manager.client.table('audio_info').update(audio_data).eq('short_id', request.short_id).execute()
-                
-                if result.data:
-                    logger.info(f"Successfully updated audio_info record for short {request.short_id}")
-                    return True
-                else:
-                    logger.error(f"Failed to update audio_info record for short {request.short_id}")
-                    return False
-            else:
-                # Create new record
-                logger.info(f"Creating new audio_info record for short {request.short_id}")
-                result = supabase_manager.client.table('audio_info').insert(audio_data).execute()
-                
-                if result.data:
-                    logger.info(f"Successfully created audio_info record for short {request.short_id}")
-                    return True
-                else:
-                    logger.error(f"Failed to create audio_info record for short {request.short_id}")
-                    return False
-
-        except Exception as e:
-            logger.error(f"Error saving audio info to Supabase: {e}")
-            return False
-
-    async def _get_existing_audio_info(self, short_id: str) -> Optional[Dict[str, Any]]:
-        """Get existing audio_info record for a short"""
-        try:
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return None
-
-            result = supabase_manager.client.table('audio_info').select('*').eq('short_id', short_id).execute()
-            
-            if result.data and len(result.data) > 0:
-                return result.data[0]
-            
-            return None
-
-        except Exception as e:
-            logger.error(f"Error getting existing audio_info: {e}")
-            return None
-
-
-
 
 # Global service instance
 audio_generation_service = AudioGenerationService()

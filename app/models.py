@@ -262,6 +262,14 @@ class AudioScriptGenerationRequest(BaseModel):
     voice_id: str = Field(..., description="ElevenLabs voice ID (used for WPM calibration)")
     user_id: str = Field(..., description="User ID associated with the request")
     short_id: str = Field(..., description="Short ID to generate script for")
+    product_description: str = Field(
+        ...,
+        alias="productDescription",
+        description="Product description used to generate the script (send as productDescription in JSON)",
+    )
+    target_language: str = Field("en-US", description="Target language for script/voice (e.g. en-US, es)")
+
+    model_config = {"populate_by_name": True}
 
 
 class AudioScriptGenerationResponse(BaseModel):

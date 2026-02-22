@@ -1,12 +1,12 @@
 import os
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from elevenlabs import ElevenLabs
 from app.config import settings
 from app.logging_config import get_logger
 from app.utils.task_management import MongoDBManager
-from app.utils.supabase_utils import supabase_manager
 from app.models import TestAudioRequest, TestAudioResponse
 
 logger = get_logger(__name__)
@@ -119,118 +119,56 @@ class TestAudioService:
             logger.error(f"Error saving audio to MongoDB: {e}")
             return False
     
+    def _save_test_audio_to_public(self, audio_data: bytes, user_id: str, voice_id: str, language: str) -> Optional[str]:
+        """Save test audio to public folder. Returns relative path: generated_audio/test_audios/{user_id}/{voice_id}_{language}.mp3"""
+        try:
+            public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
+            if not public_base:
+                logger.error("PUBLIC_OUTPUT_BASE not configured")
+                return None
+            safe_lang = language.replace("-", "_")
+            out_dir = Path(public_base) / "generated_audio" / "test_audios" / user_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            file_name = f"{voice_id}_{safe_lang}.mp3"
+            dest_path = out_dir / file_name
+            dest_path.write_bytes(audio_data)
+            relative_url = f"generated_audio/test_audios/{user_id}/{file_name}"
+            logger.info(f"Saved test audio to public folder: {relative_url}")
+            return relative_url
+        except Exception as e:
+            logger.error(f"Error saving test audio to public folder: {e}")
+            return None
+
     def _generate_test_audio(self, voice_id: str, language: str, user_id: str) -> Optional[str]:
-        """Generate test audio using ElevenLabs and upload to Supabase storage"""
+        """Generate test audio using ElevenLabs and save to local public folder (no Supabase)."""
         try:
             if not self.elevenlabs_client:
                 logger.error("ElevenLabs client not initialized")
                 return None
-                
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return None
-                
+
             test_text = self._get_test_text(language)
             logger.info(f"Generating test audio for voice {voice_id} in language {language}")
-            
-            # Generate audio using ElevenLabs
+
             audio_generator = self.elevenlabs_client.text_to_speech.convert(
                 voice_id=voice_id,
-                output_format=settings.ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
+                output_format=getattr(settings, "ELEVENLABS_DEFAULT_OUTPUT_FORMAT", "mp3_44100_128"),
                 text=test_text,
-                model_id=settings.ELEVENLABS_DEFAULT_MODEL
+                model_id=getattr(settings, "ELEVENLABS_DEFAULT_MODEL", "eleven_multilingual_v2"),
             )
-            
-            # Convert generator to bytes
-            audio_data = b''.join(audio_generator)
-            
-            # Upload to Supabase storage
-            audio_url = self._upload_audio_to_supabase(audio_data, voice_id, language, user_id)
-            if not audio_url:
-                logger.error("Failed to upload audio to Supabase storage")
+            audio_data = b"".join(audio_generator)
+
+            relative_path = self._save_test_audio_to_public(audio_data, user_id, voice_id, language)
+            if not relative_path:
+                logger.error("Failed to save test audio to public folder")
                 return None
-            
-            logger.info(f"Successfully generated and uploaded test audio for voice {voice_id}")
-            return audio_url
-            
+
+            self._save_audio_to_mongodb(voice_id, language, relative_path, user_id)
+            # Return URL with leading slash for client
+            return f"/{relative_path}"
         except Exception as e:
             logger.error(f"Error generating test audio: {e}")
             return None
-    
-    def _ensure_test_audios_bucket(self) -> bool:
-        """Ensure the test-audios bucket exists in Supabase storage"""
-        try:
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return False
-                
-            # First, try to list all buckets to see if test-audios exists
-            try:
-                buckets = supabase_manager.client.storage.list_buckets()
-                bucket_names = [bucket.name for bucket in buckets]
-                
-                if 'test-audios' in bucket_names:
-                    logger.info("test-audios bucket already exists")
-                    return True
-                else:
-                    logger.info("test-audios bucket not found, creating it...")
-                    # Create the bucket with public access
-                    result = supabase_manager.client.storage.create_bucket(
-                        'test-audios', 
-                        options={"public": True}
-                    )
-                    
-                    if result:
-                        logger.info("Successfully created test-audios bucket")
-                        return True
-                    else:
-                        logger.error("Failed to create test-audios bucket - no result returned")
-                        return False
-                        
-            except Exception as e:
-                logger.error(f"Error checking/creating test-audios bucket: {e}")
-                return False
-                    
-        except Exception as e:
-            logger.error(f"Error ensuring test-audios bucket: {e}")
-            return False
-    
-    def _upload_audio_to_supabase(self, audio_data: bytes, voice_id: str, language: str, user_id: str) -> Optional[str]:
-        """Upload audio data to Supabase storage and return public URL"""
-        try:
-            # Ensure bucket exists
-            if not self._ensure_test_audios_bucket():
-                logger.error("Failed to ensure test-audios bucket exists")
-                return None
-            
-            # Create unique filename
-            filename = f"{voice_id}_{language}_{uuid.uuid4().hex[:8]}.mp3"
-            file_path = f"test-audios/{filename}"
-            
-            logger.info(f"Uploading audio to Supabase storage: {file_path}")
-            
-            # Upload to Supabase storage
-            result = supabase_manager.client.storage.from_('test-audios').upload(
-                path=file_path,
-                file=audio_data,
-                file_options={"content-type": "audio/mpeg"}
-            )
-            
-            # Check for upload errors
-            if hasattr(result, 'error') and result.error:
-                logger.error(f"Failed to upload audio: {result.error}")
-                return None
-            
-            # Get public URL
-            public_url = supabase_manager.client.storage.from_('test-audios').get_public_url(file_path)
-            
-            logger.info(f"Successfully uploaded audio to: {public_url}")
-            return public_url
-            
-        except Exception as e:
-            logger.error(f"Error uploading audio to Supabase: {e}")
-            return None
-    
+
     def get_test_audio(self, request: TestAudioRequest) -> TestAudioResponse:
         """Get or generate test audio for the given voice and language"""
         logger.info(
@@ -265,10 +203,13 @@ class TestAudioService:
                     request.voice_id, request.language, cached_audio.get('audio_url', '')[:80],
                 )
                 test_text = self._get_test_text(request.language)
+                audio_url = cached_audio["audio_url"]
+                if audio_url and not audio_url.startswith("/"):
+                    audio_url = "/" + audio_url
                 resp = TestAudioResponse(
                     voice_id=request.voice_id,
                     language=request.language,
-                    audio_url=cached_audio['audio_url'],
+                    audio_url=audio_url,
                     user_id=request.user_id,
                     created_at=cached_audio['created_at'],
                     is_cached=True,
@@ -279,7 +220,7 @@ class TestAudioService:
                 return resp
 
             logger.info("test_audio cache miss | voice_id=%s language=%s generating", request.voice_id, request.language)
-            # Generate new test audio
+            # Generate new test audio (saves to public folder and MongoDB inside _generate_test_audio)
             audio_url = self._generate_test_audio(request.voice_id, request.language, request.user_id)
             if not audio_url:
                 logger.warning("test_audio generation failed | voice_id=%s language=%s", request.voice_id, request.language)
@@ -296,10 +237,6 @@ class TestAudioService:
                 )
                 logger.info("test_audio response | status=failed_generation voice_id=%s", request.voice_id)
                 return resp
-
-            logger.info("test_audio saving to cache | voice_id=%s language=%s", request.voice_id, request.language)
-            # Save to MongoDB for future use
-            self._save_audio_to_mongodb(request.voice_id, request.language, audio_url, request.user_id)
 
             test_text = self._get_test_text(request.language)
             resp = TestAudioResponse(

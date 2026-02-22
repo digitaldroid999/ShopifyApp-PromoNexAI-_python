@@ -23,7 +23,6 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from app.logging_config import get_logger
-from app.utils.supabase_utils import supabase_manager
 from app.utils.credit_utils import credit_manager
 from app.utils.task_management import (
     create_task, start_task, update_task_progress,
@@ -346,29 +345,9 @@ class MergingService:
                 logger.info(f"[MERGE FLOW] Thread reference cleaned up for task_id: {task_id}")
 
     def _fetch_video_scenes(self, short_id: str) -> List[Dict[str, Any]]:
-        """Fetch all video scenes for a short directly from video_scenes table."""
-        try:
-            if not supabase_manager.is_connected():
-                raise Exception("Supabase connection not available")
-
-            # Get all scenes with generated videos directly using short_id
-            scenes_result = supabase_manager.client.table('video_scenes').select(
-                'id, scene_number, generated_video_url, duration'
-            ).eq('short_id', short_id).eq('status', 'completed').not_.is_('generated_video_url', 'null').execute()
-
-            if not scenes_result.data:
-                raise Exception(
-                    f"No completed video scenes found for short {short_id}")
-
-            # Sort by scene number
-            scenes = sorted(scenes_result.data,
-                            key=lambda x: x['scene_number'])
-
-            return scenes
-
-        except Exception as e:
-            logger.error(f"Failed to fetch video scenes: {e}")
-            raise
+        """Fetch video scenes for a short. Supabase removed - return empty; use alternative data source (e.g. Prisma/API)."""
+        logger.warning("Supabase removed: _fetch_video_scenes returns empty. Provide scenes via alternative source.")
+        return []
 
     # def _fetch_product_info(self, short_id: str) -> Dict[str, Any]:
     #     """Fetch product information for thumbnail generation - REMOVED: No longer generating thumbnails."""
@@ -376,73 +355,14 @@ class MergingService:
     #     pass
 
     def _fetch_audio_data(self, short_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch audio data from audio_info table."""
-        try:
-            if not supabase_manager.is_connected():
-                logger.warning(
-                    "Supabase connection not available, skipping audio fetch")
-                return None
-
-            # Get audio info for the short
-            audio_result = supabase_manager.client.table('audio_info').select(
-                'generated_audio_url, subtitles, status'
-            ).eq('short_id', short_id).eq('status', 'completed').execute()
-
-            if not audio_result.data:
-                logger.info(f"No completed audio found for short {short_id}")
-                return None
-
-            audio_data = audio_result.data[0]
-
-            # Check if we have the required fields
-            if not audio_data.get('generated_audio_url'):
-                logger.info(
-                    f"No generated audio URL found for short {short_id}")
-                return None
-
-            logger.info(f"Found audio data for short {short_id}")
-            return audio_data
-
-        except Exception as e:
-            logger.error(f"Failed to fetch audio data: {e}")
-            # Don't fail the entire process if audio fetch fails
-            return None
+        """Fetch audio data. Supabase removed - return None; use alternative source (e.g. local path from audio generation)."""
+        logger.warning("Supabase removed: _fetch_audio_data returns None.")
+        return None
 
     def _get_music_metadata(self, short_id: str) -> Optional[Dict[str, Any]]:
-        """Get background music metadata from shorts table."""
-        try:
-            if not supabase_manager.is_connected():
-                logger.warning("Supabase connection not available, skipping music metadata fetch")
-                return None
-
-            # Get shorts metadata for background music
-            shorts_result = supabase_manager.client.table('shorts').select(
-                'metadata'
-            ).eq('id', short_id).execute()
-
-            if not shorts_result.data:
-                logger.info(f"No shorts record found for short_id {short_id}")
-                return None
-
-            metadata = shorts_result.data[0].get('metadata', {})
-            
-            # Extract music info from metadata (it's nested under 'musicInfo')
-            music_info = metadata.get('musicInfo', {})
-            
-            # Check if metadata has music tracks
-            if not music_info or (not music_info.get('track1') and not music_info.get('track2')):
-                logger.info(f"No background music metadata found for short {short_id}")
-                return None
-
-            logger.info(f"Found background music metadata for short {short_id}: "
-                       f"track1={music_info.get('track1', {}).get('name', 'N/A')}, "
-                       f"track2={'Yes' if music_info.get('track2') else 'No'}")
-            return music_info
-
-        except Exception as e:
-            logger.error(f"Failed to fetch music metadata: {e}")
-            # Don't fail the entire process if music metadata fetch fails
-            return None
+        """Get background music metadata. Supabase removed - return None."""
+        logger.warning("Supabase removed: _get_music_metadata returns None.")
+        return None
 
     # def _generate_thumbnail(self, user_id: str, product_info: Dict[str, Any], task_id: str, short_id: str) -> str:
     #     """Generate thumbnail using Vertex AI - REMOVED: No longer generating thumbnails."""
@@ -608,309 +528,32 @@ class MergingService:
             Exception: If URL conversion or download fails
         """
         try:
-            # Convert Supabase public URL to signed URL for download
-            # This will raise an exception if conversion fails (no fallback)
-            try:
-                download_url = self._get_signed_audio_url(audio_url)
-            except Exception as url_error:
-                raise Exception(
-                    f"Failed to convert public URL to signed URL for audio download: {url_error}"
-                )
-            
-            # Validate that we got a signed URL (not the original public URL)
-            if download_url == audio_url:
-                raise Exception(
-                    f"Signed URL conversion returned original public URL. This should not happen. "
-                    f"Audio URL: {audio_url}"
-                )
-            
-            if 'token=' not in download_url:
-                raise Exception(
-                    f"Invalid signed URL received (missing token). Audio URL: {audio_url}, "
-                    f"Signed URL: {download_url}"
-                )
-            
-            # Create temporary file for audio
-            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
-                temp_path = temp_file.name
+            # Local path: /generated_audio/... or generated_audio/... (Supabase removed)
+            path_stripped = (audio_url or "").strip().lstrip("/")
+            if path_stripped.startswith("generated_audio/"):
+                local_path = Path(settings.PUBLIC_OUTPUT_BASE) / path_stripped
+                if local_path.exists():
+                    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+                        shutil.copy2(local_path, temp_file.name)
+                        logger.info(f"Copied local audio to {temp_file.name}")
+                        return temp_file.name
+                raise Exception(f"Local audio file not found: {local_path}")
 
-            # Download audio with retry logic
-            download_success = False
-            for attempt in range(MAX_RETRIES):
-                try:
-                    with httpx.Client(timeout=DOWNLOAD_TIMEOUT) as client:
-                        response = client.get(download_url)
-                        response.raise_for_status()
-
-                        with open(temp_path, 'wb') as f:
-                            f.write(response.content)
-
-                    download_success = True
-                    logger.info(
-                        f"Successfully downloaded audio to {temp_path} on attempt {attempt + 1}"
-                    )
-                    break
-                    
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code in [400, 403, 404] and 'supabase.co' in download_url:
-                        logger.warning(
-                            f"Attempt {attempt + 1}: Got {e.response.status_code} error for Supabase URL, "
-                            f"trying to refresh signed URL: {e}"
-                        )
-                        # Try to refresh the signed URL (it may have expired)
-                        try:
-                            download_url = self._get_signed_audio_url(audio_url)
-                            # Continue to next attempt with new signed URL
-                        except Exception as refresh_error:
-                            logger.error(
-                                f"Failed to refresh signed URL on attempt {attempt + 1}: {refresh_error}"
-                            )
-                            if attempt == MAX_RETRIES - 1:
-                                raise Exception(
-                                    f"Failed to refresh signed URL after {MAX_RETRIES} attempts: {refresh_error}"
-                                )
-                    else:
-                        logger.error(f"HTTP error downloading audio (attempt {attempt + 1}): {e}")
-                        if attempt == MAX_RETRIES - 1:
-                            raise Exception(
-                                f"HTTP error downloading audio after {MAX_RETRIES} attempts: {e}"
-                            )
-                        break
-                except Exception as e:
-                    logger.error(f"Attempt {attempt + 1} failed: {e}")
-                    if attempt < MAX_RETRIES - 1:
-                        import time
-                        time.sleep(RETRY_DELAY)
-                    else:
-                        raise Exception(
-                            f"Failed to download audio after {MAX_RETRIES} attempts: {e}"
-                        )
-            
-            if not download_success:
-                raise Exception(f"Failed to download audio after {MAX_RETRIES} attempts")
-
-            logger.info(f"Downloaded audio to {temp_path}")
-            return temp_path
+            raise Exception(
+                "Supabase removed. Audio URL must be a local path (e.g. /generated_audio/user_id/short_id/file.mp3)."
+            )
 
         except Exception as e:
             logger.error(f"Failed to download audio: {e}")
             raise
 
     def _get_signed_audio_url(self, audio_url: str) -> str:
-        """
-        Convert Supabase public storage URL to signed URL for download.
-        
-        This method ALWAYS converts public URLs to signed URLs. It never falls back
-        to public URLs. If conversion fails, it raises an exception.
-        
-        Args:
-            audio_url: Public URL from database (format: /storage/v1/object/public/bucket/path)
-            
-        Returns:
-            Signed URL with token for downloading
-            
-        Raises:
-            Exception: If URL format is invalid or signed URL creation fails
-        """
-        try:
-            # Validate that this is a Supabase public URL
-            if '/storage/v1/object/public/' not in audio_url:
-                raise Exception(
-                    f"Invalid audio URL format. Expected Supabase public URL with '/storage/v1/object/public/', "
-                    f"got: {audio_url}"
-                )
-            
-            # Extract bucket and path from the public URL
-            # Format: https://project.supabase.co/storage/v1/object/public/bucket/path
-            parts = audio_url.split('/storage/v1/object/public/')
-            if len(parts) != 2:
-                raise Exception(
-                    f"Failed to parse audio URL. Expected format: .../storage/v1/object/public/bucket/path, "
-                    f"got: {audio_url}"
-                )
-            
-            bucket_path = parts[1]
-            
-            # Split bucket name and file path
-            # bucket_path format: "audio-files/user_id/uuid.mp3"
-            try:
-                bucket_name, file_path = bucket_path.split('/', 1)
-            except ValueError:
-                raise Exception(
-                    f"Failed to extract bucket and path from URL. "
-                    f"Expected format: bucket/path, got: {bucket_path}"
-                )
-            
-            if not bucket_name or not file_path:
-                raise Exception(
-                    f"Invalid bucket or path. Bucket: '{bucket_name}', Path: '{file_path}'"
-                )
-            
-            logger.info(
-                f"Converting public URL to signed URL - Bucket: {bucket_name}, Path: {file_path}"
-            )
-            
-            # Create signed URL with 1 hour expiration
-            # This works for both public and private buckets
-            if not supabase_manager.is_connected():
-                raise Exception("Supabase connection not available")
-            
-            signed_url_response = supabase_manager.client.storage.from_(bucket_name).create_signed_url(
-                file_path, 3600
-            )
-            
-            # Extract the signed URL string from the response
-            signed_url = None
-            if isinstance(signed_url_response, dict):
-                if 'signedURL' in signed_url_response:
-                    signed_url = signed_url_response['signedURL']
-                elif 'signedUrl' in signed_url_response:
-                    signed_url = signed_url_response['signedUrl']
-                else:
-                    # Try to find any URL-like property
-                    for key, value in signed_url_response.items():
-                        if isinstance(value, str) and value.startswith('http'):
-                            signed_url = value
-                            break
-                    
-                    if not signed_url:
-                        raise Exception(
-                            f"Invalid signed URL response format. Could not find signed URL in response: "
-                            f"{signed_url_response}"
-                        )
-            elif isinstance(signed_url_response, str):
-                signed_url = signed_url_response
-            else:
-                signed_url = str(signed_url_response)
-            
-            # Validate that we got a signed URL (should contain token parameter)
-            if not signed_url or 'token=' not in signed_url:
-                raise Exception(
-                    f"Invalid signed URL received. Expected URL with token parameter, got: {signed_url}"
-                )
-            
-            logger.info(
-                f"Successfully created signed URL for audio file in bucket {bucket_name}, path: {file_path}"
-            )
-            return signed_url
-            
-        except Exception as e:
-            logger.error(
-                f"Failed to convert public URL to signed URL for audio. "
-                f"URL: {audio_url}, Error: {e}"
-            )
-            raise Exception(
-                f"Failed to create signed URL for audio download. "
-                f"Public URL: {audio_url}, Error: {str(e)}"
-            ) from e
+        """Supabase removed. Use local path /generated_audio/... for audio."""
+        raise NotImplementedError("Supabase removed. Audio must use local path /generated_audio/...")
 
     def _get_signed_video_url(self, video_url: str) -> str:
-        """
-        Convert Supabase public storage URL to signed URL for download.
-        
-        This method ALWAYS converts public URLs to signed URLs. It never falls back
-        to public URLs. If conversion fails, it raises an exception.
-        
-        Args:
-            video_url: Public URL from database (format: /storage/v1/object/public/bucket/path)
-            
-        Returns:
-            Signed URL with token for downloading
-            
-        Raises:
-            Exception: If URL format is invalid or signed URL creation fails
-        """
-        try:
-            # Validate that this is a Supabase public URL
-            if '/storage/v1/object/public/' not in video_url:
-                raise Exception(
-                    f"Invalid video URL format. Expected Supabase public URL with '/storage/v1/object/public/', "
-                    f"got: {video_url}"
-                )
-            
-            # Extract bucket and path from the public URL
-            # Format: https://project.supabase.co/storage/v1/object/public/bucket/path
-            parts = video_url.split('/storage/v1/object/public/')
-            if len(parts) != 2:
-                raise Exception(
-                    f"Failed to parse video URL. Expected format: .../storage/v1/object/public/bucket/path, "
-                    f"got: {video_url}"
-                )
-            
-            bucket_path = parts[1]
-            
-            # Split bucket name and file path
-            # bucket_path format: "video-files/user_id/scene_id/uuid.mp4"
-            try:
-                bucket_name, file_path = bucket_path.split('/', 1)
-            except ValueError:
-                raise Exception(
-                    f"Failed to extract bucket and path from URL. "
-                    f"Expected format: bucket/path, got: {bucket_path}"
-                )
-            
-            if not bucket_name or not file_path:
-                raise Exception(
-                    f"Invalid bucket or path. Bucket: '{bucket_name}', Path: '{file_path}'"
-                )
-            
-            logger.info(
-                f"Converting public URL to signed URL - Bucket: {bucket_name}, Path: {file_path}"
-            )
-            
-            # Create signed URL with 1 hour expiration
-            # This works for both public and private buckets
-            if not supabase_manager.is_connected():
-                raise Exception("Supabase connection not available")
-            
-            signed_url_response = supabase_manager.client.storage.from_(bucket_name).create_signed_url(
-                file_path, 3600
-            )
-            
-            # Extract the signed URL string from the response
-            signed_url = None
-            if isinstance(signed_url_response, dict):
-                if 'signedURL' in signed_url_response:
-                    signed_url = signed_url_response['signedURL']
-                elif 'signedUrl' in signed_url_response:
-                    signed_url = signed_url_response['signedUrl']
-                else:
-                    # Try to find any URL-like property
-                    for key, value in signed_url_response.items():
-                        if isinstance(value, str) and value.startswith('http'):
-                            signed_url = value
-                            break
-                    
-                    if not signed_url:
-                        raise Exception(
-                            f"Invalid signed URL response format. Could not find signed URL in response: "
-                            f"{signed_url_response}"
-                        )
-            elif isinstance(signed_url_response, str):
-                signed_url = signed_url_response
-            else:
-                signed_url = str(signed_url_response)
-            
-            # Validate that we got a signed URL (should contain token parameter)
-            if not signed_url or 'token=' not in signed_url:
-                raise Exception(
-                    f"Invalid signed URL received. Expected URL with token parameter, got: {signed_url}"
-                )
-            
-            logger.info(
-                f"Successfully created signed URL for video file in bucket {bucket_name}, path: {file_path}"
-            )
-            return signed_url
-            
-        except Exception as e:
-            logger.error(
-                f"Failed to convert public URL to signed URL for video. "
-                f"URL: {video_url}, Error: {e}"
-            )
-            raise Exception(
-                f"Failed to create signed URL for video download. "
-                f"Public URL: {video_url}, Error: {str(e)}"
-            ) from e
+        """Supabase removed. Use local paths for video."""
+        raise NotImplementedError("Supabase removed. Video URLs must use local paths.")
 
     def _handle_expired_url(self, url: str, user_id: str) -> str:
         """
@@ -924,70 +567,10 @@ class MergingService:
             A working URL for the video
         """
         try:
-            # Check if this is a Supabase signed URL
+            # Supabase removed - return URL as-is (no regeneration)
             if 'supabase.co' in url and 'token=' in url:
-                logger.info(f"Detected potentially expired Supabase signed URL for user {user_id}, regenerating signed URL for private storage")
-                
-                # Extract the file path from the signed URL
-                # URL format: https://.../storage/v1/object/sign/bucket/path?token=...
-                if '/storage/v1/object/sign/' in url:
-                    # Extract bucket and path from signed URL
-                    parts = url.split('/storage/v1/object/sign/')
-                    if len(parts) > 1:
-                        bucket_path = parts[1].split('?')[0]  # Remove query parameters
-                        bucket_parts = bucket_path.split('/', 1)
-                        if len(bucket_parts) > 1:
-                            bucket_name = bucket_parts[0]
-                            file_path = bucket_parts[1]
-                            
-                            # For private storage, directly regenerate signed URL instead of trying public URL
-                            try:
-                                if not supabase_manager.is_connected():
-                                    raise Exception("Supabase connection not available")
-                                
-                                # Regenerate signed URL for private storage
-                                signed_url_response = supabase_manager.client.storage.from_(bucket_name).create_signed_url(
-                                    file_path, 3600  # 1 hour expiration
-                                )
-                                
-                                # Extract the signed URL string from the response
-                                if isinstance(signed_url_response, dict):
-                                    if 'signedURL' in signed_url_response:
-                                        signed_url = signed_url_response['signedURL']
-                                    elif 'signedUrl' in signed_url_response:
-                                        signed_url = signed_url_response['signedUrl']
-                                    else:
-                                        # Try to find any URL-like property
-                                        for key, value in signed_url_response.items():
-                                            if isinstance(value, str) and value.startswith('http'):
-                                                signed_url = value
-                                                break
-                                        else:
-                                            raise Exception(f"Could not find signed URL in response: {signed_url_response}")
-                                elif isinstance(signed_url_response, str):
-                                    signed_url = signed_url_response
-                                else:
-                                    signed_url = str(signed_url_response)
-                                
-                                logger.info(f"Successfully regenerated signed URL for private storage: {signed_url}")
-                                return signed_url
-                                
-                            except Exception as regen_error:
-                                logger.error(f"Failed to regenerate signed URL for private storage: {regen_error}")
-                                # Try to provide more specific error information
-                                if "permission" in str(regen_error).lower():
-                                    raise Exception(f"Permission denied when regenerating signed URL for private storage: {regen_error}")
-                                elif "bucket" in str(regen_error).lower():
-                                    raise Exception(f"Storage bucket access issue when regenerating signed URL: {regen_error}")
-                                else:
-                                    raise Exception(f"Could not regenerate signed URL for private storage: {regen_error}")
-                
-                # If we can't parse the URL or convert it, return the original
-                logger.warning(f"Could not parse or convert expired URL for user {user_id}, returning original: {url}")
-                return url
-            else:
-                # Not a Supabase signed URL, return as-is
-                return url
+                logger.warning("Supabase removed: cannot regenerate signed URL, returning URL as-is")
+            return url
                 
         except Exception as e:
             logger.error(f"Error handling expired URL {url}: {e}")
@@ -1294,51 +877,12 @@ class MergingService:
             return video_path
 
     def _get_user_plan(self, user_id: str) -> str:
-        """Get user's subscription plan."""
-        try:
-            if not supabase_manager.is_connected():
-                return "free"  # Default to free if can't check
+        """Get user's subscription plan. Supabase removed - default to free."""
+        return "free"
 
-            # Get user's subscription info
-            result = supabase_manager.client.rpc(
-                'get_user_credits',
-                {'user_uuid': user_id}
-            ).execute()
-
-            if result.data:
-                plan_name = result.data[0].get('plan_name', 'free')
-                return plan_name if plan_name != 'no_plan' else 'free'
-
-            return "free"
-
-        except Exception as e:
-            logger.error(f"Failed to get user plan: {e}")
-            return "free"
-    
     def _get_plan_watermark_setting(self, plan_name: str) -> bool:
-        """Get watermark_enabled setting for a subscription plan."""
-        try:
-            if not supabase_manager.is_connected():
-                return True  # Default to watermark enabled if can't check
-
-            # Query subscription_plans table for watermark_enabled
-            result = supabase_manager.client.table('subscription_plans') \
-                .select('watermark_enabled') \
-                .eq('name', plan_name) \
-                .execute()
-
-            if result.data and len(result.data) > 0:
-                watermark_enabled = result.data[0].get('watermark_enabled', True)
-                logger.info(f"Plan '{plan_name}' watermark_enabled: {watermark_enabled}")
-                return watermark_enabled
-
-            # If plan not found, default to watermark enabled for safety
-            logger.warning(f"Plan '{plan_name}' not found in subscription_plans, defaulting to watermark enabled")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to get watermark setting for plan '{plan_name}': {e}")
-            return True  # Default to watermark enabled if error
+        """Get watermark_enabled for plan. Supabase removed - default to True."""
+        return True
 
     def _add_watermark_to_video(self, video_path: str, task_id: str) -> str:
         """Add watermark to video using FFmpeg."""
@@ -1998,73 +1542,12 @@ class MergingService:
             return "00:00:00,000"
 
     def _upload_final_video(self, video_path: str, short_id: str, task_id: str) -> str:
-        """Upload final video to Supabase storage."""
-        try:
-            if not supabase_manager.is_connected():
-                raise Exception("Supabase connection not available")
-
-            # Validate that the video file exists before attempting upload
-            if not os.path.exists(video_path):
-                raise Exception(f"Video file not found at path: {video_path}")
-            
-            # Check file size to ensure it's not empty
-            file_size = os.path.getsize(video_path)
-            if file_size == 0:
-                raise Exception(f"Video file is empty (0 bytes) at path: {video_path}")
-            
-            logger.info(f"Uploading video file: {video_path} (size: {file_size} bytes)")
-
-            # Create storage path
-            filename = f"final_videos/{short_id}/{uuid.uuid4()}.mp4"
-
-            # Upload to Supabase storage
-            with open(video_path, 'rb') as f:
-                result = supabase_manager.client.storage.from_('generated-content').upload(
-                    path=filename,
-                    file=f,
-                    file_options={"content-type": "video/mp4"}
-                )
-
-            # Check for upload errors
-            if hasattr(result, 'error') and result.error:
-                raise Exception(
-                    f"Failed to upload final video: {result.error}")
-
-            # Get public URL
-            final_video_url = supabase_manager.client.storage.from_(
-                'generated-content').get_public_url(filename)
-
-            logger.info(
-                f"Successfully uploaded final video to {final_video_url}")
-            return final_video_url
-
-        except Exception as e:
-            logger.error(f"Failed to upload final video: {e}")
-            raise
+        """Upload final video. Supabase removed - raise; use local save or alternative storage."""
+        raise NotImplementedError("Supabase removed. Save final video to local public folder or alternative storage.")
 
     def _update_shorts_final_video(self, short_id: str, final_video_url: str):
-        """Update shorts table with final video URL."""
-        try:
-            if not supabase_manager.is_connected():
-                raise Exception("Supabase connection not available")
-
-            result = supabase_manager.client.table('shorts').update({
-                'final_video_url': final_video_url,  # Using correct final_video_url field
-                'status': 'completed',
-                'updated_at': datetime.utcnow().isoformat()
-            }).eq('id', short_id).execute()
-
-            # Check for update errors
-            if hasattr(result, 'error') and result.error:
-                raise Exception(
-                    f"Failed to update shorts final video: {result.error}")
-
-            logger.info(
-                f"Updated shorts {short_id} with final video URL and completed status")
-
-        except Exception as e:
-            logger.error(f"Failed to update shorts final video: {e}")
-            raise
+        """Update shorts with final video URL. Supabase removed - no-op."""
+        logger.warning("Supabase removed: _update_shorts_final_video is a no-op.")
 
     def _cleanup_temp_files(self, file_paths: List[str]):
         """Clean up temporary files."""
@@ -2122,43 +1605,8 @@ class MergingService:
             logger.error(f"Error during cleanup: {e}")
 
     def test_supabase_connection(self) -> Dict[str, Any]:
-        """Test Supabase connection and storage access."""
-        try:
-            logger.info("Testing Supabase connection...")
-
-            if not supabase_manager.is_connected():
-                return {"success": False, "error": "Supabase not connected"}
-
-            # Test basic connection
-            try:
-                # Test a simple query
-                result = supabase_manager.client.table(
-                    'shorts').select('id').limit(1).execute()
-                logger.info("Basic Supabase connection test passed")
-            except Exception as e:
-                logger.error(f"Basic connection test failed: {e}")
-                return {"success": False, "error": f"Basic connection failed: {e}"}
-
-            # Test storage access
-            try:
-                buckets = supabase_manager.client.storage.list_buckets()
-                bucket_names = [bucket.name for bucket in buckets]
-                logger.info(f"Available storage buckets: {bucket_names}")
-
-                if 'generated-content' not in bucket_names:
-                    return {"success": False, "error": "Storage bucket 'generated-content' not found"}
-
-                logger.info("Storage access test passed")
-
-            except Exception as e:
-                logger.error(f"Storage access test failed: {e}")
-                return {"success": False, "error": f"Storage access failed: {e}"}
-
-            return {"success": True, "message": "All tests passed"}
-
-        except Exception as e:
-            logger.error(f"Supabase connection test failed: {e}")
-            return {"success": False, "error": str(e)}
+        """Supabase removed."""
+        return {"success": False, "error": "Supabase has been removed from this project."}
 
 
 # Global instance

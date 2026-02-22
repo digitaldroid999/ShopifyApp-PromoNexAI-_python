@@ -1,0 +1,123 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// Final videos — row created when user starts the video generation workflow (one per product)
+model Short {
+  id             String    @id @default(cuid())
+  productId      String?   @unique @map("product_id") // one short per product
+  userId         String?   @map("user_id") // Session.shop (store domain)
+  title          String
+  status         String    @default("draft") // e.g. draft, generating, ready, failed
+  finalVideoUrl  String?   @map("final_video_url")
+  metadata       Json?     // flexible payload (e.g. dimensions, platform, options)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  scenes   VideoScene[]
+  audioInfo AudioInfo?
+
+  @@map("shorts")
+}
+
+// Per-scene data for a short
+model VideoScene {
+  id                  String   @id @default(cuid())
+  shortId             String   @map("short_id")
+  sceneNumber         Int      @map("scene_number")
+  duration            Float    // seconds
+  imageUrl            String?  @map("image_url")
+  generatedVideoUrl   String?  @map("generated_video_url")
+  status              String   @default("pending") // e.g. pending, generating, ready, failed
+  metadata            Json?
+  generateVideoPrompt String?  @map("generate_video_prompt")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  short Short @relation(fields: [shortId], references: [id], onDelete: Cascade)
+
+  @@map("video_scenes")
+}
+
+// Audio data for a short (one per short)
+model AudioInfo {
+  id                 String   @id @default(cuid())
+  userId             BigInt?  @map("user_id") // Shopify user ID (matches Session.userId)
+  shortId            String   @unique @map("short_id")
+  voiceId            String?  @map("voice_id")
+  voiceName          String?  @map("voice_name")
+  speed              Float?   @default(1)
+  volume             Float?   @default(1)
+  generatedAudioUrl String?  @map("generated_audio_url")
+  subtitles          Json?    // e.g. [{ start, end, text }]
+  status             String   @default("pending") // e.g. pending, generating, ready, failed
+  audioScript        String?  @map("audio_script")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  short Short @relation(fields: [shortId], references: [id], onDelete: Cascade)
+
+  @@map("audio_info")
+}
+
+// Temporary state for "Create promo video" modal — saved while generation is in progress, deleted when done
+model PromoWorkflowTemp {
+  id        String   @id @default(cuid())
+  shop      String
+  productId String   @map("product_id")
+  state     Json     // serialized workflow state (activeTab, scene completion, per-scene step/urls)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([shop, productId])
+  @@map("promo_workflow_temp")
+}
+
+// Remotion video generation tasks (async/polling)
+model Task {
+  id               String   @id @default(cuid())
+  remotionTaskId   String   @map("remotion_task_id")
+  shortId          String   @map("short_id")
+  videoSceneId     String?  @map("video_scene_id")
+  status           String   @default("pending") // pending, completed, failed
+  stage            String?
+  progress         Int?     @default(0)
+  videoUrl         String?  @map("video_url")
+  error            String?
+  metadata         Json?
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("tasks")
+}
