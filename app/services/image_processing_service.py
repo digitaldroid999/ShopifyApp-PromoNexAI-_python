@@ -911,7 +911,10 @@ class ImageProcessingService:
         scale: float = 0.4,
         position: str = "center",
         duration: Optional[int] = None,
-        add_animation: bool = True
+        add_animation: bool = True,
+        add_shadow: bool = True,
+        shadow_blur_radius: int = 25,
+        shadow_offset: Tuple[int, int] = (15, 15)
     ) -> Dict[str, Any]:
         """
         Start an async image-video merge task (Scene2 generation).
@@ -962,7 +965,10 @@ class ImageProcessingService:
                     scale,
                     position,
                     duration,
-                    add_animation
+                    add_animation,
+                    add_shadow,
+                    shadow_blur_radius,
+                    shadow_offset,
                 ),
                 daemon=True,
                 name=f"image_merge_{task_id}"
@@ -998,7 +1004,10 @@ class ImageProcessingService:
         scale: float,
         position: str,
         duration: Optional[int],
-        add_animation: bool
+        add_animation: bool,
+        add_shadow: bool = True,
+        shadow_blur_radius: int = 25,
+        shadow_offset: Tuple[int, int] = (15, 15)
     ):
         """
         Background worker that processes the image-video merge.
@@ -1021,7 +1030,10 @@ class ImageProcessingService:
                 scale=scale,
                 position=position,
                 duration=duration,
-                add_animation=add_animation
+                add_animation=add_animation,
+                add_shadow=add_shadow,
+                shadow_blur_radius=shadow_blur_radius,
+                shadow_offset=shadow_offset,
             )
             
             # Update task based on result
