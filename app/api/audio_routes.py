@@ -1,5 +1,7 @@
 """Audio script generation and audio generation endpoints."""
 
+import traceback
+
 from fastapi import APIRouter, HTTPException
 
 from app.models import (
@@ -25,7 +27,7 @@ def generate_audio_script(request: AudioScriptGenerationRequest) -> AudioScriptG
     try:
         return audio_generation_service.generate_audio_script(request)
     except Exception as e:
-        logger.error(f"Audio script generation failed: {e}")
+        logger.error(f"Audio script generation failed: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

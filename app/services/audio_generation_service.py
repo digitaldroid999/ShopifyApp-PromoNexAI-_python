@@ -108,10 +108,11 @@ class AudioGenerationService:
                 words_per_minute = 150.0
             test_text = test_audio_result.get("text", "")
 
-            # Step 3: Get short description
+            # Step 3: Get short description (use defaults if Supabase unavailable or no row)
             short_info = asyncio.run(self._get_short_description(request.short_id))
             if not short_info:
-                raise Exception(f"No short found for short_id: {request.short_id}")
+                logger.warning(f"No short found for short_id {request.short_id}, using default product info")
+                short_info = {"title": "Product", "description": "Amazing product for your audience."}
 
             total_duration = 24
             style = "trendy-influencer-vlog"

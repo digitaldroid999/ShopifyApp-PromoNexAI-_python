@@ -54,6 +54,11 @@ class Settings:
     OPENAI_MAX_TOKENS: int = _int(os.getenv("OPENAI_MAX_TOKENS", "100"))
     OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", "0.3"))
 
+    # ElevenLabs (audio generation)
+    ELEVENLABS_API_KEY: Optional[str] = os.getenv("ELEVENLABS_API_KEY")
+    ELEVENLABS_DEFAULT_MODEL: str = os.getenv("ELEVENLABS_DEFAULT_MODEL", "eleven_multilingual_v2")
+    ELEVENLABS_DEFAULT_OUTPUT_FORMAT: str = os.getenv("ELEVENLABS_DEFAULT_OUTPUT_FORMAT", "mp3_44100_128")
+
     # Scheduler
     CLEANUP_INTERVAL_HOURS: int = _int(os.getenv("CLEANUP_INTERVAL_HOURS", "24"))
     CLEANUP_DAYS_THRESHOLD: int = _int(os.getenv("CLEANUP_DAYS_THRESHOLD", "2"))
