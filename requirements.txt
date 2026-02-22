@@ -17,6 +17,10 @@ elevenlabs==2.35.0
 # MongoDB (test audio cache, audio generation)
 pymongo>=4.0.0
 
+# Vertex AI / Imagen (background generation)
+google-genai==1.62.0
+google-auth==2.48.0
+
 # Image processing (composite routes)
 Pillow>=10.0.0
 opencv-python-headless>=4.8.0
