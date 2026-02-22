@@ -96,11 +96,16 @@ class AudioGenerationService:
             if not test_audio_result:
                 raise Exception("Failed to get or generate test audio")
 
-            words_per_minute = asyncio.run(self._analyze_audio_speed(test_audio_result["url"]))
+            if "audio_bytes" in test_audio_result:
+                words_per_minute = self._analyze_audio_speed_from_bytes(
+                    test_audio_result["audio_bytes"], test_audio_result.get("text", "")
+                )
+                test_audio_duration = self._calculate_audio_duration_from_bytes(test_audio_result["audio_bytes"])
+            else:
+                words_per_minute = asyncio.run(self._analyze_audio_speed(test_audio_result["url"]))
+                test_audio_duration = asyncio.run(self._calculate_audio_duration(test_audio_result["url"]))
             if not words_per_minute:
                 words_per_minute = 150.0
-
-            test_audio_duration = asyncio.run(self._calculate_audio_duration(test_audio_result["url"]))
             test_text = test_audio_result.get("text", "")
 
             # Step 3: Get short description
@@ -154,7 +159,12 @@ class AudioGenerationService:
             if not test_audio_result:
                 raise Exception("Failed to get or generate test audio")
 
-            words_per_minute = asyncio.run(self._analyze_audio_speed(test_audio_result["url"]))
+            if "audio_bytes" in test_audio_result:
+                words_per_minute = self._analyze_audio_speed_from_bytes(
+                    test_audio_result["audio_bytes"], test_audio_result.get("text", "")
+                )
+            else:
+                words_per_minute = asyncio.run(self._analyze_audio_speed(test_audio_result["url"]))
             if not words_per_minute:
                 words_per_minute = 150.0
 
@@ -271,35 +281,37 @@ class AudioGenerationService:
             return None
 
     async def _get_or_generate_test_audio(self, voice_id: str, user_id: str, language: str = "en-US") -> Optional[Dict[str, Any]]:
-        """Check MongoDB for existing test audio or generate it using test_audio_service logic"""
+        """Check MongoDB for existing test audio or generate it. Uses local public folder (no Supabase upload)."""
         try:
             # Check MongoDB for existing test audio with matching language
             if not self.mongodb.ensure_connection():
                 logger.error("Failed to connect to MongoDB")
                 return None
 
-            # Query for existing test audio with voice_id and language
             query = {
                 "voice_id": voice_id,
                 "language": language,
                 "type": "test_audio"
             }
-            
             result = self.mongodb.database.test_audio.find_one(query)
             if result:
                 logger.info(f"Found cached test audio for voice {voice_id} with language {language}")
-                # Convert Supabase URL to signed URL for access
-                signed_url = await self._get_signed_url_from_supabase_url(result['audio_url'])
-                if signed_url:
-                    return {
-                        "url": signed_url,
-                        "text": result.get('text', self.test_texts.get(language, self.test_texts['en-US']))
-                    }
+                audio_url = result.get("audio_url", "")
+                text = result.get("text", self.test_texts.get(language, self.test_texts["en-US"]))
+                # Local path (saved under public/generated_audio/test_audios/...)
+                if audio_url.startswith("generated_audio/"):
+                    local_path = Path(settings.PUBLIC_OUTPUT_BASE) / audio_url
+                    if local_path.exists():
+                        audio_bytes = local_path.read_bytes()
+                        return {"audio_bytes": audio_bytes, "text": text}
+                    logger.warning("Cached test audio file not found on disk, will regenerate")
                 else:
+                    # Legacy: Supabase URL — try signed URL for backward compatibility
+                    signed_url = await self._get_signed_url_from_supabase_url(audio_url)
+                    if signed_url:
+                        return {"url": signed_url, "text": text}
                     logger.warning("Failed to get signed URL for cached test audio, will regenerate")
-                    # Fall through to generate new test audio
 
-            # Generate new test audio if not found or signed URL failed
             logger.info(f"Generating new test audio for voice {voice_id} with language {language}")
             return await self._generate_test_audio(voice_id, user_id, language)
 
@@ -354,81 +366,84 @@ class AudioGenerationService:
             logger.error(f"Error converting Supabase URL to signed URL: {e}")
             return None
 
+    def _save_test_audio_to_public(self, audio_data: bytes, user_id: str, voice_id: str, language: str) -> Optional[str]:
+        """Save test audio to public folder. Returns relative URL: generated_audio/test_audios/{user_id}/{voice_id}_{language}.mp3"""
+        try:
+            public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
+            if not public_base:
+                logger.error("PUBLIC_OUTPUT_BASE not configured")
+                return None
+            safe_lang = language.replace("-", "_")
+            out_dir = Path(public_base) / "generated_audio" / "test_audios" / user_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            file_name = f"{voice_id}_{safe_lang}.mp3"
+            dest_path = out_dir / file_name
+            dest_path.write_bytes(audio_data)
+            relative_url = f"generated_audio/test_audios/{user_id}/{file_name}"
+            logger.info(f"Saved test audio to public folder: {relative_url}")
+            return relative_url
+        except Exception as e:
+            logger.error(f"Error saving test audio to public folder: {e}")
+            return None
+
     async def _generate_test_audio(self, voice_id: str, user_id: str, language: str = "en-US") -> Optional[Dict[str, Any]]:
-        """Generate test audio using ElevenLabs (similar to test_audio_service)"""
+        """Generate test audio using ElevenLabs and save to local public folder (no Supabase upload)."""
         try:
             if not self.elevenlabs_client:
                 logger.error("ElevenLabs client not initialized")
                 return None
 
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return None
-
-            # Use language-specific test text
-            test_text = self.test_texts.get(language, self.test_texts['en-US'])
+            test_text = self.test_texts.get(language, self.test_texts["en-US"])
             logger.info(f"Generating test audio for voice {voice_id} with language {language}")
-            logger.info(f"Test text: {test_text}")
 
-            # Generate audio using ElevenLabs
             audio_generator = self.elevenlabs_client.text_to_speech.convert(
                 voice_id=voice_id,
                 output_format=settings.ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
                 text=test_text,
                 model_id=settings.ELEVENLABS_DEFAULT_MODEL
             )
+            audio_data = b"".join(audio_generator)
 
-            # Convert generator to bytes
-            audio_data = b''.join(audio_generator)
-
-            # Upload to Supabase storage (test-audios bucket)
-            upload_info = await self._upload_test_audio_to_supabase(audio_data, voice_id, language)
-            if not upload_info:
-                logger.error("Failed to upload test audio to Supabase storage")
+            relative_path = self._save_test_audio_to_public(audio_data, user_id, voice_id, language)
+            if not relative_path:
+                logger.error("Failed to save test audio to public folder")
                 return None
 
-            # Save to MongoDB with language
-            await self._save_test_audio_to_mongodb(voice_id, upload_info["url"], user_id, language, test_text)
-
-            logger.info(f"Successfully generated and uploaded test audio for voice {voice_id}")
-            return {
-                "url": upload_info["url"],
-                "text": test_text
-            }
+            await self._save_test_audio_to_mongodb(voice_id, relative_path, user_id, language, test_text)
+            logger.info(f"Successfully generated and saved test audio for voice {voice_id}")
+            return {"audio_bytes": audio_data, "text": test_text}
 
         except Exception as e:
             logger.error(f"Error generating test audio: {e}")
             return None
 
-    async def _analyze_audio_speed(self, audio_url: str) -> Optional[float]:
-        """Analyze audio speed to determine words per minute"""
+    def _analyze_audio_speed_from_bytes(self, audio_data: bytes, test_text: str) -> float:
+        """Analyze audio speed from bytes to determine words per minute."""
         try:
-            # Download audio file
+            word_count = len(test_text.split())
+            duration = self._calculate_audio_duration_from_bytes(audio_data)
+            if duration <= 0:
+                return 150.0
+            words_per_minute = (word_count / duration) * 60
+            logger.info(f"Analyzed audio speed from bytes: {words_per_minute:.2f} WPM")
+            return words_per_minute
+        except Exception as e:
+            logger.error(f"Error analyzing audio speed from bytes: {e}")
+            return 150.0
+
+    async def _analyze_audio_speed(self, audio_url: str) -> Optional[float]:
+        """Analyze audio speed to determine words per minute (from URL)."""
+        try:
             response = requests.get(audio_url, timeout=10)
             if response.status_code != 200:
                 logger.error(f"Failed to download audio: {response.status_code}")
-                logger.warning("Using default WPM due to audio download failure")
-                return 150.0  # Default WPM
-
+                return 150.0
             audio_data = response.content
-            
-            # For now, we'll use a simple estimation based on the test text
-            # In a real implementation, you might use speech recognition to get exact timing
-            test_text = self.test_texts['en-US']
-            word_count = len(test_text.split())
-            
-            # Estimate duration based on typical speech patterns
-            # This is a simplified approach - in production you'd analyze the actual audio
-            estimated_duration = len(audio_data) / 16000  # Rough estimation
-            words_per_minute = (word_count / estimated_duration) * 60 if estimated_duration > 0 else 150.0
-            
-            logger.info(f"Analyzed audio speed: {words_per_minute:.2f} WPM")
-            return words_per_minute
-
+            test_text = self.test_texts["en-US"]
+            return self._analyze_audio_speed_from_bytes(audio_data, test_text)
         except Exception as e:
             logger.error(f"Error analyzing audio speed: {e}")
-            logger.warning("Using default WPM due to analysis error")
-            return 150.0  # Default WPM
+            return 150.0
 
     async def _generate_audio_script(
         self, 
@@ -577,7 +592,7 @@ Description: {short_description}"""
             raise
 
     def _save_audio_to_public(self, audio_data: bytes, user_id: str, short_id: str) -> Optional[str]:
-        """Save audio to public folder. Returns relative URL: generated_audio/{user_id}/{short_id}/{file_name}"""
+        """Save audio to public folder. Returns URL with leading slash: /generated_audio/{user_id}/{short_id}/{file_name}"""
         try:
             public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
             if not public_base:
@@ -588,7 +603,7 @@ Description: {short_description}"""
             file_name = f"{uuid.uuid4().hex[:12]}.mp3"
             dest_path = out_dir / file_name
             dest_path.write_bytes(audio_data)
-            relative_url = f"generated_audio/{user_id}/{short_id}/{file_name}"
+            relative_url = f"/generated_audio/{user_id}/{short_id}/{file_name}"
             logger.info(f"Saved audio to public folder: {relative_url}")
             return relative_url
         except Exception as e:
@@ -826,176 +841,6 @@ Description: {short_description}"""
             logger.error(f"Error extracting MP3 bitrate: {e}")
             return 128  # Default bitrate
 
-    async def _upload_audio_to_supabase(self, audio_data: bytes, voice_id: str, user_id: str, audio_type: str) -> Optional[Dict[str, Any]]:
-        """Upload audio data to Supabase storage and return detailed upload info"""
-        try:
-            # Ensure bucket exists
-            if not await self._ensure_audio_bucket_exists():
-                logger.error("Failed to ensure audio bucket exists")
-                return None
-
-            # Create unique filename with UUID (following JavaScript pattern)
-            audio_uuid = uuid.uuid4()
-            filename = f"{user_id}/{audio_uuid}.mp3"
-            
-            logger.info(f"Uploading audio to Supabase storage: {filename}")
-
-            # Upload to Supabase storage
-            result = supabase_manager.client.storage.from_('audio-files').upload(
-                path=filename,
-                file=audio_data,
-                file_options={"content-type": "audio/mpeg"}
-            )
-
-            # Check for upload errors
-            if hasattr(result, 'error') and result.error:
-                logger.error(f"Failed to upload audio: {result.error}")
-                return None
-
-            # Get public URL
-            public_url = supabase_manager.client.storage.from_('audio-files').get_public_url(filename)
-
-            # Calculate file size
-            file_size = len(audio_data)
-
-            upload_info = {
-                "url": public_url,
-                "path": filename,
-                "size": file_size,
-                "mimeType": "audio/mpeg",
-                "uuid": str(audio_uuid)
-            }
-
-            logger.info(f"Successfully uploaded audio to: {public_url}")
-            return upload_info
-
-        except Exception as e:
-            logger.error(f"Error uploading audio to Supabase: {e}")
-            return None
-
-    async def _ensure_audio_bucket_exists(self) -> bool:
-        """Ensure the audio-files bucket exists in Supabase storage"""
-        try:
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return False
-
-            # Try to list all buckets to see if audio-files exists
-            try:
-                buckets = supabase_manager.client.storage.list_buckets()
-                bucket_names = [bucket.name for bucket in buckets]
-                
-                if 'audio-files' in bucket_names:
-                    logger.info("audio-files bucket already exists")
-                    return True
-                else:
-                    logger.info("audio-files bucket not found, creating it...")
-                    # Create the bucket with public access
-                    result = supabase_manager.client.storage.create_bucket(
-                        'audio-files', 
-                        options={"public": True}
-                    )
-                    
-                    if result:
-                        logger.info("Successfully created audio-files bucket")
-                        return True
-                    else:
-                        logger.error("Failed to create audio-files bucket")
-                        return False
-                        
-            except Exception as e:
-                logger.error(f"Error checking/creating audio-files bucket: {e}")
-                return False
-                    
-        except Exception as e:
-            logger.error(f"Error ensuring audio-files bucket: {e}")
-            return False
-
-    async def _upload_test_audio_to_supabase(self, audio_data: bytes, voice_id: str, language: str) -> Optional[Dict[str, Any]]:
-        """Upload test audio data to Supabase test-audios bucket"""
-        try:
-            # Ensure bucket exists
-            if not await self._ensure_test_audio_bucket_exists():
-                logger.error("Failed to ensure test-audios bucket exists")
-                return None
-
-            # Create unique filename with voice_id, language, and UUID
-            audio_uuid = uuid.uuid4().hex[:8]
-            filename = f"test-audios/{voice_id}_{language}_{audio_uuid}.mp3"
-            
-            logger.info(f"Uploading test audio to Supabase storage: {filename}")
-
-            # Upload to Supabase storage
-            result = supabase_manager.client.storage.from_('test-audios').upload(
-                path=filename,
-                file=audio_data,
-                file_options={"content-type": "audio/mpeg"}
-            )
-
-            # Check for upload errors
-            if hasattr(result, 'error') and result.error:
-                logger.error(f"Failed to upload test audio: {result.error}")
-                return None
-
-            # Get public URL
-            public_url = supabase_manager.client.storage.from_('test-audios').get_public_url(filename)
-
-            # Calculate file size
-            file_size = len(audio_data)
-
-            upload_info = {
-                "url": public_url,
-                "path": filename,
-                "size": file_size,
-                "mimeType": "audio/mpeg",
-                "uuid": audio_uuid
-            }
-
-            logger.info(f"Successfully uploaded test audio to: {public_url}")
-            return upload_info
-
-        except Exception as e:
-            logger.error(f"Error uploading test audio to Supabase: {e}")
-            return None
-
-    async def _ensure_test_audio_bucket_exists(self) -> bool:
-        """Ensure the test-audios bucket exists in Supabase storage"""
-        try:
-            if not supabase_manager.is_connected():
-                logger.error("Supabase client not connected")
-                return False
-
-            # Try to list all buckets to see if test-audios exists
-            try:
-                buckets = supabase_manager.client.storage.list_buckets()
-                bucket_names = [bucket.name for bucket in buckets]
-                
-                if 'test-audios' in bucket_names:
-                    logger.info("test-audios bucket already exists")
-                    return True
-                else:
-                    logger.info("test-audios bucket not found, creating it...")
-                    # Create the bucket with public access
-                    result = supabase_manager.client.storage.create_bucket(
-                        'test-audios', 
-                        options={"public": True}
-                    )
-                    
-                    if result:
-                        logger.info("Successfully created test-audios bucket")
-                        return True
-                    else:
-                        logger.error("Failed to create test-audios bucket")
-                        return False
-                        
-            except Exception as e:
-                logger.error(f"Error checking/creating test-audios bucket: {e}")
-                return False
-                    
-        except Exception as e:
-            logger.error(f"Error ensuring test-audios bucket: {e}")
-            return False
-
     async def _save_test_audio_to_mongodb(self, voice_id: str, audio_url: str, user_id: str, language: str = "en-US", test_text: str = "") -> bool:
         """Save test audio info to MongoDB"""
         try:
@@ -1158,14 +1003,8 @@ Description: {short_description}"""
             if credit_result and credit_result.get("new_balance") is not None:
                 metadata["newBalance"] = credit_result.get("new_balance")
             
-            # Validate that audio_url is a public URL (should contain /storage/v1/object/public/)
-            if '/storage/v1/object/public/' not in audio_url:
-                logger.warning(
-                    f"Audio URL does not appear to be a public URL format. "
-                    f"Expected format: .../storage/v1/object/public/bucket/path, got: {audio_url[:100]}..."
-                )
-            else:
-                logger.info(f"Saving public URL to PostgreSQL audio_info table: {audio_url[:100]}...")
+            # audio_url may be relative path (generated_audio/{user_id}/{short_id}/{file_name}) or legacy Supabase URL
+            logger.info(f"Saving audio URL to audio_info table: {audio_url[:100]}...")
             
             audio_data = {
                 "user_id": request.user_id,

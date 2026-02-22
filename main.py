@@ -56,6 +56,10 @@ def create_app() -> FastAPI:
     from app.api.composite_routes import router as composite_router
     app.include_router(composite_router)
 
+    # Audio: script generation and audio generation (save to public/generated_audio/{user_id}/{short_id}/)
+    from app.api.audio_routes import router as audio_router
+    app.include_router(audio_router)
+
     # Main API routes (scraping, video, merging, etc.) — enable after fixing missing services
     # from app.api.routes import router as main_router
     # app.include_router(main_router)
