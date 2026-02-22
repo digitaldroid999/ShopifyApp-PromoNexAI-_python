@@ -1,6 +1,10 @@
 """Task management — in-memory implementation for async/polling patterns."""
 
 from enum import Enum
+
+# Re-export for test_audio_service (which imports MongoDBManager from here)
+from app.utils.mongodb_manager import MongoDBManager  # noqa: F401
+
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 import uuid

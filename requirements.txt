@@ -14,6 +14,9 @@ openai>=1.0.0
 # Audio generation (script + TTS)
 elevenlabs==2.35.0
 
+# MongoDB (test audio cache, audio generation)
+pymongo>=4.0.0
+
 # Image processing (composite routes)
 Pillow>=10.0.0
 opencv-python-headless>=4.8.0
