@@ -690,7 +690,7 @@ GENERATE UNIVERSAL PRODUCT BACKDROP DESCRIPTION NOW:"""
             file_name = f"background-{uuid.uuid4().hex[:12]}.png"
             dest_path = out_dir / file_name
             shutil.copy2(image_path, str(dest_path))
-            relative_url = f"generated_images/{user_id}/{short_id}/{file_name}"
+            relative_url = f"/generated_images/{user_id}/{short_id}/{file_name}"
             logger.info(f"  → Saved to public folder: {relative_url}")
             return relative_url
         except Exception as e:

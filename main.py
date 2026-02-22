@@ -60,6 +60,10 @@ def create_app() -> FastAPI:
     from app.api.audio_routes import router as audio_router
     app.include_router(audio_router)
 
+    # Background: async generation (OpenAI + Vertex Imagen) and extract-prompt
+    from app.api.background_routes import router as background_router
+    app.include_router(background_router)
+
     # Main API routes (scraping, video, merging, etc.) — enable after fixing missing services
     # from app.api.routes import router as main_router
     # app.include_router(main_router)
