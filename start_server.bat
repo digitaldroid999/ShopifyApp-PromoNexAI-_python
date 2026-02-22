@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 echo Starting E-commerce Scraper API...
 echo.
 
@@ -21,6 +22,6 @@ REM Start the server
 echo Starting API server...
 echo API will be available at: http://localhost:8050
 echo.
-python -m app.main
+python -m main
 
 pause 
