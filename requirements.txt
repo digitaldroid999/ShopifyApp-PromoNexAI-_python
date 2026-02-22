@@ -12,7 +12,7 @@ requests>=2.31.0
 openai>=1.0.0
 
 # Audio generation (script + TTS)
-elevenlabs>=1.0.0
+elevenlabs==2.35.0
 
 # Image processing (composite routes)
 Pillow>=10.0.0
