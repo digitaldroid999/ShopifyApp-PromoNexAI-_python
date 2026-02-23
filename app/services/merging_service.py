@@ -23,7 +23,6 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from app.logging_config import get_logger
-from app.utils.credit_utils import credit_manager
 from app.utils.db import fetch_video_scenes as db_fetch_video_scenes
 from app.utils.db import fetch_audio_info as db_fetch_audio_info
 from app.utils.db import update_short_final_video as db_update_short_final_video
