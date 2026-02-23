@@ -124,15 +124,21 @@ def _task_to_response(task: dict) -> FinalizeShortResponse:
     short_id = task.get("short_id") or metadata.get("short_id") or ""
     user_id = task.get("user_id") or ""
 
+    msg = task.get("message")
+    message = msg if isinstance(msg, str) else (str(msg) if msg is not None else status_str)
+    current_step = msg if isinstance(msg, str) else (str(msg) if msg is not None else None)
+    progress_val = task.get("progress")
+    progress = float(progress_val) if progress_val is not None else None
+
     return FinalizeShortResponse(
         task_id=task.get("task_id", ""),
         status=status,
         short_id=short_id,
         user_id=user_id,
-        message=task.get("message") or status_str,
+        message=message,
         created_at=created_at,
-        progress=float(task["progress"]) if task.get("progress") is not None else None,
-        current_step=task.get("message"),
+        progress=progress,
+        current_step=current_step,
         error_message=task.get("error_message"),
         thumbnail_url=task.get("thumbnail_url"),
         final_video_url=metadata.get("final_video_url"),

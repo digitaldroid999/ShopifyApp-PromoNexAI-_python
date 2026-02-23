@@ -114,7 +114,7 @@ class MergingService:
             logger.info(f"[STEP 0] Initializing merge task...")
             start_task(task_id)
             update_task_progress(
-                task_id, 0.1, "Fetching video scenes and audio data")
+                task_id, "Fetching video scenes and audio data", 10)
             logger.info(f"[STEP 0] ✓ Task initialized successfully")
 
             # Step 1: Fetch video scenes and audio data
@@ -139,7 +139,7 @@ class MergingService:
                 logger.info(f"[STEP 1.2] ⚠ No audio data found for this short")
             logger.info(f"[STEP 1] ✓ Completed fetching data")
 
-            update_task_progress(task_id, 0.2, "Downloading videos and audio")
+            update_task_progress(task_id, "Downloading videos and audio", 20)
 
             # Step 2: Download videos and audio
             logger.info(f"[STEP 2] Downloading videos and audio...")
@@ -166,7 +166,7 @@ class MergingService:
                 logger.info(f"[STEP 2.2] ⚠ Skipping audio download (no audio URL available)")
             logger.info(f"[STEP 2] ✓ Completed downloading files")
 
-            update_task_progress(task_id, 0.4, "Merging videos and audio")
+            update_task_progress(task_id, "Merging videos and audio", 40)
 
             # Step 3: Merge videos
             logger.info(f"[STEP 3] Merging videos...")
@@ -240,7 +240,7 @@ class MergingService:
             else:
                 logger.info(f"[STEP 4] ⚠ Skipping audio merge (no audio or music available)")
 
-            update_task_progress(task_id, 0.5, "Processing final video")
+            update_task_progress(task_id, "Processing final video", 50)
 
             # Step 5: Add watermark if free plan
             logger.info(f"[STEP 5] Processing final video (watermark, subtitles)...")
@@ -276,7 +276,7 @@ class MergingService:
                 logger.info(f"[STEP 5.2] ⚠ Skipping subtitles (no subtitle data available)")
             logger.info(f"[STEP 5] ✓ Completed processing final video")
 
-            update_task_progress(task_id, 0.7, "Uploading final video")
+            update_task_progress(task_id, "Uploading final video", 70)
 
             # Step 7: Upload final video
             logger.info(f"[STEP 6] Uploading final video to Supabase...")
