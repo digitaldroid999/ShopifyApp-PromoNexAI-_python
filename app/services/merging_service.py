@@ -5,7 +5,6 @@ This module provides functionality for:
 - Merging generated video scenes into final videos
 - Merging audio with videos
 - Embedding subtitles into videos
-- Adding watermarks for free plan users
 - Managing the finalization process with task management
 """
 
@@ -25,6 +24,7 @@ from pathlib import Path
 from app.logging_config import get_logger
 from app.utils.db import fetch_video_scenes as db_fetch_video_scenes
 from app.utils.db import fetch_audio_info as db_fetch_audio_info
+from app.utils.db import fetch_short_metadata as db_fetch_short_metadata
 from app.utils.db import update_short_final_video as db_update_short_final_video
 from app.utils.task_management import (
     create_task, start_task, update_task_progress,
@@ -242,17 +242,9 @@ class MergingService:
 
             update_task_progress(task_id, "Processing final video", 50)
 
-            # Step 5: Add watermark if free plan
-            logger.info(f"[STEP 5] Processing final video (watermark, subtitles)...")
-            logger.info(f"[STEP 5.1] Checking user plan and adding watermark if needed...")
-            final_video_path = self._add_watermark_if_needed(
-                merged_video_path, user_id, task_id
-            )
-            if final_video_path != merged_video_path:
-                final_size = os.path.getsize(final_video_path) if os.path.exists(final_video_path) else 0
-                logger.info(f"[STEP 5.1] ✓ Watermark added: {final_video_path} ({final_size / 1024 / 1024:.2f} MB)")
-            else:
-                logger.info(f"[STEP 5.1] ✓ No watermark needed (user is not on free plan)")
+            # Step 5: Process final video (subtitles only; watermark removed)
+            logger.info(f"[STEP 5] Processing final video (subtitles)...")
+            final_video_path = merged_video_path
 
             # Step 6: Add subtitles if available
             if audio_data and audio_data.get('subtitles'):
@@ -363,9 +355,23 @@ class MergingService:
             return None
 
     def _get_music_metadata(self, short_id: str) -> Optional[Dict[str, Any]]:
-        """Get background music metadata. Supabase removed - return None."""
-        logger.warning("Supabase removed: _get_music_metadata returns None.")
-        return None
+        """
+        Get background music from short's metadata (shorts.metadata.bgMusic).
+        Expects metadata.bgMusic: { id, name, genre, duration, previewUrl, downloadUrl }.
+        Returns { "track1": bgMusic } for compatibility with existing download/merge logic.
+        """
+        try:
+            metadata = db_fetch_short_metadata(short_id)
+            if not metadata or "bgMusic" not in metadata:
+                return None
+            bg = metadata["bgMusic"]
+            if not bg or not isinstance(bg, dict):
+                return None
+            # Existing code expects track1 (and optionally track2); map bgMusic to track1
+            return {"track1": bg}
+        except Exception as e:
+            logger.error(f"_get_music_metadata failed for short_id={short_id}: {e}")
+            return None
 
     # def _generate_thumbnail(self, user_id: str, product_info: Dict[str, Any], task_id: str, short_id: str) -> str:
     #     """Generate thumbnail using Vertex AI - REMOVED: No longer generating thumbnails."""
@@ -823,72 +829,6 @@ class MergingService:
         except Exception as e:
             logger.error(f"Failed to merge videos: {e}")
             raise
-
-    def _add_watermark_if_needed(self, video_path: str, user_id: str, task_id: str) -> str:
-        """Add watermark based on user's plan watermark_enabled setting."""
-        try:
-            # Step 1: Get user's plan name
-            user_plan = self._get_user_plan(user_id)
-            
-            # Step 2: Get watermark_enabled setting for this plan
-            watermark_enabled = self._get_plan_watermark_setting(user_plan)
-
-            if watermark_enabled:
-                logger.info(f"Adding watermark for user {user_id} (plan: {user_plan}, watermark_enabled: true)")
-                return self._add_watermark_to_video(video_path, task_id)
-            else:
-                logger.info(f"User {user_id} is on {user_plan} plan, watermark disabled (watermark_enabled: false)")
-                return video_path
-
-        except Exception as e:
-            logger.error(f"Failed to check user plan or add watermark: {e}")
-            # Continue without watermark if there's an error
-            return video_path
-
-    def _get_user_plan(self, user_id: str) -> str:
-        """Get user's subscription plan. Supabase removed - default to free."""
-        return "free"
-
-    def _get_plan_watermark_setting(self, plan_name: str) -> bool:
-        """Get watermark_enabled for plan. Supabase removed - default to True."""
-        return True
-
-    def _add_watermark_to_video(self, video_path: str, task_id: str) -> str:
-        """Add watermark to video using FFmpeg."""
-        try:
-            # Create temporary directory for watermarked video
-            temp_dir = tempfile.mkdtemp()
-            watermarked_video_path = os.path.join(temp_dir, "watermarked.mp4")
-
-            # Add watermark using FFmpeg with bigger, transparent gray text and subtle shadow
-            cmd = [
-                'ffmpeg', '-y',
-                '-i', video_path,
-                '-vf', 'drawtext=text=\'PromoNexAI\':fontcolor=gray@0.6:fontsize=120:x=(w-text_w)/2:y=(h-text_h)/2:shadowcolor=black@0.2:shadowx=1:shadowy=1',
-                '-c:a', 'copy',
-                watermarked_video_path
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minutes timeout
-            )
-
-            if result.returncode != 0:
-                raise Exception(f"FFmpeg watermark failed: {result.stderr}")
-
-            if not os.path.exists(watermarked_video_path):
-                raise Exception("Watermarked video file was not created")
-
-            logger.info(f"Successfully added watermark to video")
-            return watermarked_video_path
-
-        except Exception as e:
-            logger.error(f"Failed to add watermark: {e}")
-            raise
-
 
     def _check_video_has_audio(self, video_path: str) -> bool:
         """Check if video file has an audio stream using FFprobe."""
@@ -1511,7 +1451,7 @@ class MergingService:
             return "00:00:00,000"
 
     def _upload_final_video(self, video_path: str, short_id: str, task_id: str, user_id: str) -> str:
-        """Save final video to public folder (Prisma/local). Returns relative URL for DB (e.g. final_videos/user_id/short_id/final.mp4)."""
+        """Save final video to public folder (Prisma/local). Returns relative URL for DB (e.g. /final_videos/user_id/short_id/final.mp4)."""
         try:
             public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
             if not public_base:
@@ -1520,8 +1460,8 @@ class MergingService:
             os.makedirs(out_dir, exist_ok=True)
             out_path = os.path.join(out_dir, "final.mp4")
             shutil.copy2(video_path, out_path)
-            # Return relative URL for storage in shorts.final_video_url (frontend can serve from public)
-            relative_url = f"final_videos/{user_id}/{short_id}/final.mp4"
+            # Return relative URL for storage in shorts.final_video_url (leading slash for frontend)
+            relative_url = f"/final_videos/{user_id}/{short_id}/final.mp4"
             logger.info(f"Saved final video to {out_path}, relative URL: {relative_url}")
             return relative_url
         except Exception as e:

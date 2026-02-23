@@ -114,6 +114,37 @@ def fetch_audio_info(short_id: str) -> Optional[Dict[str, Any]]:
             conn.close()
 
 
+def fetch_short_metadata(short_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch metadata JSON for a short (shorts.metadata).
+    Structure may include bgMusic: { id, name, genre, duration, previewUrl, downloadUrl }.
+    """
+    conn = None
+    try:
+        conn = _get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT metadata FROM shorts WHERE id = %s LIMIT 1",
+                (short_id,),
+            )
+            row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        meta = row[0]
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except json.JSONDecodeError:
+                return None
+        return meta if isinstance(meta, dict) else None
+    except Exception as e:
+        logger.error(f"fetch_short_metadata failed for short_id={short_id}: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
+
+
 def update_short_final_video(short_id: str, final_video_url: str) -> None:
     """Update shorts.final_video_url for the given short."""
     conn = None
