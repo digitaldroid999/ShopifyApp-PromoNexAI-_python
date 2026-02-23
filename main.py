@@ -11,6 +11,7 @@ Or:
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
 from app.logging_config import get_logger
@@ -42,6 +43,13 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request, exc: RequestValidationError):
+        """Log 422 validation errors so server logs show missing/invalid fields."""
+        logger.warning("Request validation failed (422) path=%s detail=%s", request.url.path, exc.errors())
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
     @app.get("/health", tags=["health"])
     async def health():
