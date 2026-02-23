@@ -72,6 +72,10 @@ def create_app() -> FastAPI:
     from app.api.background_routes import router as background_router
     app.include_router(background_router)
 
+    # Merge: finalize short (merge scenes + audio, upload final video)
+    from app.api.merge_routes import router as merge_router
+    app.include_router(merge_router)
+
     # Main API routes (scraping, video, merging, etc.) — enable after fixing missing services
     # from app.api.routes import router as main_router
     # app.include_router(main_router)

@@ -41,6 +41,9 @@ class Settings:
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
     REDIS_DB: int = _int(os.getenv("REDIS_DB", "0"))
 
+    # PostgreSQL (Prisma schema: shorts, video_scenes, audio_info)
+    DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
+
     # MongoDB
     MONGODB_URI: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     MONGODB_DATABASE: str = os.getenv("MONGODB_DATABASE", "eshop_scraper")

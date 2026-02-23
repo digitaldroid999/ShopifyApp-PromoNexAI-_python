@@ -14,6 +14,7 @@ class TaskType(str, Enum):
     SCRAPING = "scraping"
     VIDEO_GENERATION = "video_generation"
     MEDIA_PROCESSING = "media_processing"
+    FINALIZE_SHORT = "finalize_short"
 
 
 class TaskStatus(str, Enum):

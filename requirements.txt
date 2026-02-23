@@ -14,6 +14,9 @@ openai>=1.0.0
 # Audio generation (script + TTS)
 elevenlabs==2.35.0
 
+# PostgreSQL (Prisma DB: shorts, video_scenes, audio_info)
+psycopg2-binary>=2.9.0
+
 # MongoDB (test audio cache, audio generation)
 pymongo>=4.0.0
 

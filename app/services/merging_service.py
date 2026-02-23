@@ -24,6 +24,9 @@ from pathlib import Path
 
 from app.logging_config import get_logger
 from app.utils.credit_utils import credit_manager
+from app.utils.db import fetch_video_scenes as db_fetch_video_scenes
+from app.utils.db import fetch_audio_info as db_fetch_audio_info
+from app.utils.db import update_short_final_video as db_update_short_final_video
 from app.utils.task_management import (
     create_task, start_task, update_task_progress,
     complete_task, fail_task, get_task_status,
@@ -65,16 +68,10 @@ class MergingService:
         """
         try:
             # Create task
-            task_metadata = {
-                "user_id": user_id,
-                "short_id": short_id,
-                "task_type": "finalize_short"
-            }
-
             task_id = create_task(
                 task_type=TaskType.FINALIZE_SHORT,
-                task_metadata=task_metadata,
-                user_id=user_id
+                user_id=user_id,
+                short_id=short_id
             )
 
             # Start task in background thread
@@ -287,7 +284,7 @@ class MergingService:
             final_size = os.path.getsize(final_video_path) if os.path.exists(final_video_path) else 0
             logger.info(f"[STEP 6] Uploading video: {final_video_path} ({final_size / 1024 / 1024:.2f} MB)")
             final_video_url = self._upload_final_video(
-                final_video_path, short_id, task_id)
+                final_video_path, short_id, task_id, user_id)
             if not final_video_url:
                 raise Exception("Failed to upload final video")
             logger.info(f"[STEP 6] ✓ Final video uploaded successfully: {final_video_url}")
@@ -322,7 +319,7 @@ class MergingService:
 
             # Complete task
             logger.info(f"[STEP 9] Completing merge task...")
-            complete_task(task_id, {
+            complete_task(task_id, metadata={
                 "final_video_url": final_video_url,
                 "short_id": short_id
             })
@@ -345,9 +342,13 @@ class MergingService:
                 logger.info(f"[MERGE FLOW] Thread reference cleaned up for task_id: {task_id}")
 
     def _fetch_video_scenes(self, short_id: str) -> List[Dict[str, Any]]:
-        """Fetch video scenes for a short. Supabase removed - return empty; use alternative data source (e.g. Prisma/API)."""
-        logger.warning("Supabase removed: _fetch_video_scenes returns empty. Provide scenes via alternative source.")
-        return []
+        """Fetch video scenes for a short from PostgreSQL (Prisma schema: video_scenes)."""
+        try:
+            scenes = db_fetch_video_scenes(short_id)
+            return scenes
+        except Exception as e:
+            logger.error(f"_fetch_video_scenes failed for short_id={short_id}: {e}")
+            return []
 
     # def _fetch_product_info(self, short_id: str) -> Dict[str, Any]:
     #     """Fetch product information for thumbnail generation - REMOVED: No longer generating thumbnails."""
@@ -355,9 +356,12 @@ class MergingService:
     #     pass
 
     def _fetch_audio_data(self, short_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch audio data. Supabase removed - return None; use alternative source (e.g. local path from audio generation)."""
-        logger.warning("Supabase removed: _fetch_audio_data returns None.")
-        return None
+        """Fetch audio data for a short from PostgreSQL (Prisma schema: audio_info)."""
+        try:
+            return db_fetch_audio_info(short_id)
+        except Exception as e:
+            logger.error(f"_fetch_audio_data failed for short_id={short_id}: {e}")
+            return None
 
     def _get_music_metadata(self, short_id: str) -> Optional[Dict[str, Any]]:
         """Get background music metadata. Supabase removed - return None."""
@@ -552,8 +556,8 @@ class MergingService:
         raise NotImplementedError("Supabase removed. Audio must use local path /generated_audio/...")
 
     def _get_signed_video_url(self, video_url: str) -> str:
-        """Supabase removed. Use local paths for video."""
-        raise NotImplementedError("Supabase removed. Video URLs must use local paths.")
+        """Return URL for downloading video. Local paths are handled in _download_videos; here return as-is for HTTP URLs."""
+        return video_url
 
     def _handle_expired_url(self, url: str, user_id: str) -> str:
         """
@@ -578,7 +582,7 @@ class MergingService:
             return url
 
     def _download_videos(self, scenes_data: List[Dict[str, Any]], user_id: str) -> List[str]:
-        """Download all video files from scenes."""
+        """Download all video files from scenes (local path or HTTP URL)."""
         try:
             video_files = []
 
@@ -588,88 +592,56 @@ class MergingService:
                     logger.warning(f"Scene {scene.get('id')} has no generated_video_url, skipping")
                     continue
 
-                # Convert Supabase public URL to signed URL for download
-                # This will raise an exception if conversion fails (no fallback)
-                try:
+                # Local path under PUBLIC_OUTPUT_BASE (e.g. generated_videos/user_id/short_id/...)
+                path_stripped = (video_url or "").strip().lstrip("/")
+                if path_stripped.startswith("generated_videos/") or path_stripped.startswith("generated_video/"):
+                    local_path = Path(settings.PUBLIC_OUTPUT_BASE) / path_stripped
+                    if local_path.exists():
+                        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+                            shutil.copy2(local_path, temp_file.name)
+                            temp_path = temp_file.name
+                        logger.info(f"Copied local video for scene {scene.get('id')}: {local_path}")
+                    else:
+                        raise Exception(f"Local video file not found for scene {scene.get('id')}: {local_path}")
+                else:
+                    # HTTP URL (or other): resolve and download
                     working_url = self._get_signed_video_url(video_url)
-                except Exception as url_error:
-                    raise Exception(
-                        f"Failed to convert public URL to signed URL for scene {scene.get('id')}: {url_error}"
-                    )
-                
-                # Validate that we got a signed URL (not the original public URL)
-                if working_url == video_url:
-                    raise Exception(
-                        f"Signed URL conversion returned original public URL. This should not happen. "
-                        f"Scene: {scene.get('id')}, URL: {video_url}"
-                    )
-                
-                if 'token=' not in working_url:
-                    raise Exception(
-                        f"Invalid signed URL received (missing token). Scene: {scene.get('id')}, "
-                        f"URL: {working_url}"
-                    )
-                
-                # Create temporary file
-                with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
-                    temp_path = temp_file.name
+                    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+                        temp_path = temp_file.name
 
-                # Download video with retry logic
-                download_success = False
-                for attempt in range(MAX_RETRIES):
-                    try:
-                        with httpx.Client(timeout=DOWNLOAD_TIMEOUT) as client:
-                            response = client.get(working_url)
-                            response.raise_for_status()
-
-                            with open(temp_path, 'wb') as f:
-                                f.write(response.content)
-
-                        download_success = True
-                        logger.info(
-                            f"Successfully downloaded video for scene {scene.get('id')} on attempt {attempt + 1}"
-                        )
-                        break
-                        
-                    except httpx.HTTPStatusError as e:
-                        if e.response.status_code in [400, 403, 404] and 'supabase.co' in working_url:
-                            logger.warning(
-                                f"Attempt {attempt + 1}: Got {e.response.status_code} error for Supabase URL, "
-                                f"trying to refresh signed URL: {e}"
-                            )
-                            # Try to refresh the signed URL (it may have expired)
-                            try:
-                                working_url = self._get_signed_video_url(video_url)
-                                # Continue to next attempt with new signed URL
-                            except Exception as refresh_error:
-                                logger.error(
-                                    f"Failed to refresh signed URL on attempt {attempt + 1}: {refresh_error}"
-                                )
-                                if attempt == MAX_RETRIES - 1:
-                                    raise Exception(
-                                        f"Failed to refresh signed URL after {MAX_RETRIES} attempts: {refresh_error}"
-                                    )
-                        else:
-                            logger.error(f"HTTP error downloading video (attempt {attempt + 1}): {e}")
-                            if attempt == MAX_RETRIES - 1:
-                                raise Exception(
-                                    f"HTTP error downloading video after {MAX_RETRIES} attempts: {e}"
-                                )
+                    download_success = False
+                    for attempt in range(MAX_RETRIES):
+                        try:
+                            with httpx.Client(timeout=DOWNLOAD_TIMEOUT) as client:
+                                response = client.get(working_url)
+                                response.raise_for_status()
+                                with open(temp_path, 'wb') as f:
+                                    f.write(response.content)
+                            download_success = True
+                            logger.info(f"Successfully downloaded video for scene {scene.get('id')} on attempt {attempt + 1}")
                             break
-                    except Exception as e:
-                        logger.error(f"Attempt {attempt + 1} failed: {e}")
-                        if attempt < MAX_RETRIES - 1:
-                            import time
-                            time.sleep(RETRY_DELAY)
-                        else:
-                            raise Exception(
-                                f"Failed to download video after {MAX_RETRIES} attempts: {e}"
-                            )
+                        except httpx.HTTPStatusError as e:
+                            if e.response.status_code in [400, 403, 404] and 'supabase.co' in (working_url or ""):
+                                try:
+                                    working_url = self._get_signed_video_url(video_url)
+                                except Exception as refresh_error:
+                                    if attempt == MAX_RETRIES - 1:
+                                        raise Exception(f"Failed after {MAX_RETRIES} attempts: {refresh_error}")
+                            else:
+                                logger.error(f"HTTP error downloading video (attempt {attempt + 1}): {e}")
+                                if attempt == MAX_RETRIES - 1:
+                                    raise Exception(f"HTTP error downloading video after {MAX_RETRIES} attempts: {e}")
+                                break
+                        except Exception as e:
+                            logger.error(f"Attempt {attempt + 1} failed: {e}")
+                            if attempt < MAX_RETRIES - 1:
+                                import time
+                                time.sleep(RETRY_DELAY)
+                            else:
+                                raise Exception(f"Failed to download video after {MAX_RETRIES} attempts: {e}")
 
-                if not download_success:
-                    raise Exception(
-                        f"Failed to download video for scene {scene.get('id')} after {MAX_RETRIES} attempts"
-                    )
+                    if not download_success:
+                        raise Exception(f"Failed to download video for scene {scene.get('id')} after {MAX_RETRIES} attempts")
 
                 # Verify downloaded video duration
                 downloaded_duration = self._get_video_duration(temp_path)
@@ -678,8 +650,6 @@ class MergingService:
                     f"✅ Downloaded scene {scene.get('scene_number')}: "
                     f"{downloaded_duration:.2f}s (expected: {expected_duration}s)"
                 )
-                
-                # Warn if duration mismatch
                 if abs(downloaded_duration - expected_duration) > 1.0:
                     logger.warning(
                         f"⚠️  Scene {scene.get('scene_number')} duration mismatch: "
@@ -1541,13 +1511,31 @@ class MergingService:
             logger.error(f"Failed to convert seconds to SRT time: {e}")
             return "00:00:00,000"
 
-    def _upload_final_video(self, video_path: str, short_id: str, task_id: str) -> str:
-        """Upload final video. Supabase removed - raise; use local save or alternative storage."""
-        raise NotImplementedError("Supabase removed. Save final video to local public folder or alternative storage.")
+    def _upload_final_video(self, video_path: str, short_id: str, task_id: str, user_id: str) -> str:
+        """Save final video to public folder (Prisma/local). Returns relative URL for DB (e.g. final_videos/user_id/short_id/final.mp4)."""
+        try:
+            public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
+            if not public_base:
+                raise Exception("PUBLIC_OUTPUT_BASE not configured")
+            out_dir = os.path.join(public_base, "final_videos", user_id, short_id)
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "final.mp4")
+            shutil.copy2(video_path, out_path)
+            # Return relative URL for storage in shorts.final_video_url (frontend can serve from public)
+            relative_url = f"final_videos/{user_id}/{short_id}/final.mp4"
+            logger.info(f"Saved final video to {out_path}, relative URL: {relative_url}")
+            return relative_url
+        except Exception as e:
+            logger.error(f"_upload_final_video failed: {e}")
+            raise
 
     def _update_shorts_final_video(self, short_id: str, final_video_url: str):
-        """Update shorts with final video URL. Supabase removed - no-op."""
-        logger.warning("Supabase removed: _update_shorts_final_video is a no-op.")
+        """Update shorts.final_video_url in PostgreSQL (Prisma schema: shorts)."""
+        try:
+            db_update_short_final_video(short_id, final_video_url)
+        except Exception as e:
+            logger.error(f"_update_shorts_final_video failed for short_id={short_id}: {e}")
+            raise
 
     def _cleanup_temp_files(self, file_paths: List[str]):
         """Clean up temporary files."""
