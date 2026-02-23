@@ -94,7 +94,18 @@ class BackgroundGenerationService:
             logger.error(f"✗ Failed to check Vertex AI availability: {e}")
             logger.exception(e)
             logger.warning("→ Background generation may not work properly")
-    
+
+    def is_vertex_available(self) -> bool:
+        """Return True if Vertex AI (Imagen) is available for background generation."""
+        try:
+            return bool(self.vertex_manager and self.vertex_manager.is_available())
+        except Exception:
+            return False
+
+    def is_openai_available(self) -> bool:
+        """Return True if OpenAI client is available for prompt extraction."""
+        return self.openai_client is not None
+
     def start_background_generation_task(
         self, 
         user_id: str,
@@ -202,58 +213,56 @@ class BackgroundGenerationService:
         This runs in a separate thread.
         """
         try:
-            logger.info(f"🔄 [Task {task_id}] Starting background generation process...")
-            
-            self._update_task(task_id, status=TaskStatus.RUNNING, current_step='Starting', progress=10)
-            
+            logger.info("=" * 80)
+            logger.info(f"[Task {task_id}] BG GENERATION WITH AI — START")
+            logger.info("=" * 80)
+
+            # Step 0/4: Validate Vertex AI
+            logger.info(f"[Task {task_id}] Step 0/4: Validating Vertex AI availability...")
+            self._update_task(task_id, status=TaskStatus.RUNNING, current_step='Validating Vertex AI', progress=5)
             if not self.vertex_manager or not self.vertex_manager.is_available():
+                logger.error(f"[Task {task_id}] Step 0/4 FAILED: Vertex AI is not available")
                 raise Exception("Vertex AI is not available")
-            
-            # Step 1: Get background prompt (either from manual_prompt or extract with OpenAI)
+            logger.info(f"[Task {task_id}] Step 0/4 OK: Vertex AI available")
+
+            # Step 1/4: Get background prompt (manual or OpenAI)
             if manual_prompt:
-                # Use manual prompt directly
-                logger.info(f"[Task {task_id}] Step 1/3: Using manual prompt (skipping OpenAI)...")
-                self._update_task(task_id, current_step='Using manual prompt', progress=40)
+                logger.info(f"[Task {task_id}] Step 1/4: Using manual prompt (skipping OpenAI)...")
+                self._update_task(task_id, current_step='Using manual prompt', progress=25)
                 background_prompt = manual_prompt
-                logger.info(f"[Task {task_id}] ✓ Manual prompt loaded")
-                logger.info(f"[Task {task_id}]   → Background prompt: {background_prompt[:100]}...")
+                logger.info(f"[Task {task_id}] Step 1/4 OK: Manual prompt loaded ({len(background_prompt)} chars)")
+                logger.info(f"[Task {task_id}]   → Prompt preview: {background_prompt[:120]}...")
             else:
-                # Extract background prompt with OpenAI (40% progress)
-                logger.info(f"[Task {task_id}] Step 1/3: Extracting background prompt with OpenAI GPT-4o-mini...")
-                self._update_task(task_id, current_step='Generating background prompt with OpenAI', progress=40)
-                
+                logger.info(f"[Task {task_id}] Step 1/4: Extracting background prompt with OpenAI GPT-4o-mini...")
+                self._update_task(task_id, current_step='Generating background prompt with OpenAI', progress=25)
                 if not self.openai_client:
                     raise Exception("OpenAI client not initialized and no manual prompt provided")
-                
                 background_prompt = self._extract_background_prompt(
                     product_description, mood, style, environment
                 )
-                logger.info(f"[Task {task_id}] ✓ Background prompt extraction completed")
-                logger.info(f"[Task {task_id}]   → Background prompt: {background_prompt[:100]}...")
-            
-            # Step 2: Generate background with Vertex AI Imagen 4.0 (70% progress)
-            logger.info(f"[Task {task_id}] Step 2/3: Generating background with Vertex AI Imagen 4.0...")
-            self._update_task(task_id, current_step='Generating background with Vertex AI', progress=70)
+                logger.info(f"[Task {task_id}] Step 1/4 OK: Background prompt extracted ({len(background_prompt)} chars)")
+                logger.info(f"[Task {task_id}]   → Prompt preview: {background_prompt[:120]}...")
+
+            # Step 2/4: Generate image with Vertex AI Imagen 4.0
+            logger.info(f"[Task {task_id}] Step 2/4: Generating background image with Vertex AI Imagen 4.0...")
+            self._update_task(task_id, current_step='Generating background with Vertex AI', progress=50)
             generated_image_path = self._generate_background_with_vertex(background_prompt)
-            
             if not generated_image_path:
                 raise Exception("Failed to generate background using Vertex AI Imagen 4.0")
-            
-            logger.info(f"[Task {task_id}] ✓ Background generated successfully (Vertex AI Imagen 4.0)")
-            logger.info(f"[Task {task_id}]   → Local file path: {generated_image_path}")
+            logger.info(f"[Task {task_id}] Step 2/4 OK: Image generated at {generated_image_path}")
 
-            # Step 3: Save to public folder (no Supabase)
+            # Step 3/4: Save to public folder
             short_id = self.tasks.get(task_id, {}).get('short_id') or scene_id or 'unknown'
-            self._update_task(task_id, current_step='Saving to public folder', progress=90)
+            logger.info(f"[Task {task_id}] Step 3/4: Saving to public folder (user_id={user_id}, short_id={short_id})...")
+            self._update_task(task_id, current_step='Saving to public folder', progress=85)
             final_image_url = self._save_background_to_public(generated_image_path, user_id, short_id)
-
             if not final_image_url:
                 raise Exception("Failed to save image to public folder")
-
-            logger.info(f"[Task {task_id}] ✓ Image saved to public folder")
+            logger.info(f"[Task {task_id}] Step 3/4 OK: Saved as {final_image_url}")
 
             self._cleanup_temp_files([generated_image_path])
 
+            # Step 4/4: Completed
             self._update_task(
                 task_id,
                 status=TaskStatus.COMPLETED,
@@ -261,18 +270,16 @@ class BackgroundGenerationService:
                 current_step='Completed',
                 progress=100
             )
+            logger.info(f"[Task {task_id}] Step 4/4: Completed.")
+            logger.info("=" * 80)
+            logger.info(f"[Task {task_id}] BG GENERATION WITH AI — SUCCESS — image_url={final_image_url}")
+            logger.info("=" * 80)
 
-            logger.info("=" * 80)
-            logger.info(f"✅ [Task {task_id}] BACKGROUND GENERATION COMPLETED SUCCESSFULLY!")
-            logger.info(f"Final Image URL: {final_image_url}")
-            logger.info("=" * 80)
-            
         except Exception as e:
             logger.error("=" * 80)
-            logger.error(f"❌ [Task {task_id}] BACKGROUND GENERATION FAILED!")
-            logger.error(f"Error: {str(e)}")
+            logger.error(f"[Task {task_id}] BG GENERATION WITH AI — FAILED")
+            logger.error(f"[Task {task_id}] Error: {str(e)}")
             logger.error("=" * 80)
-            
             self._update_task(
                 task_id,
                 status=TaskStatus.FAILED,
@@ -606,29 +613,19 @@ GENERATE UNIVERSAL PRODUCT BACKDROP DESCRIPTION NOW:"""
             Path to the generated image file or None if failed
         """
         try:
-            logger.info("  → Preparing Vertex AI Imagen 4.0 for background generation...")
-            
+            logger.info("  [Vertex] Preparing Imagen 4.0 for background generation...")
             if not self.vertex_manager or not self.vertex_manager.is_available():
+                logger.error("  [Vertex] Vertex AI is not available — cannot generate image.")
                 raise RuntimeError("Vertex AI is not available")
-            
-            # Import required types
             try:
                 from google.genai.types import GenerateImagesConfig
             except ImportError:
+                logger.error("  [Vertex] Google Vertex AI types not available (missing google-genai?).")
                 raise RuntimeError("Google Vertex AI types not available")
-            
-            # Use Imagen 4.0 model
             model = "imagen-4.0-generate-001"
-            
-            logger.info(f"  → Model: {model}")
-            logger.info(f"  → Aspect Ratio: 16:9 (1920x1080)")
-            logger.info("  → Background Prompt:")
-            logger.info("  " + "-" * 76)
-            for line in background_prompt.split('\n'):
-                logger.info(f"  {line}")
-            logger.info("  " + "-" * 76)
-            
-            logger.info("  → Calling Vertex AI Imagen API...")
+            logger.info(f"  [Vertex] Model: {model} | Aspect ratio: 16:9 (1920x1080)")
+            logger.info("  [Vertex] Prompt (first 200 chars): " + (background_prompt[:200] or "") + "...")
+            logger.info("  [Vertex] Calling Vertex AI Imagen API...")
 
             # Mandatory prefix/suffix so the image model never draws the product (critical for compositing)
             vertex_prompt = (
@@ -652,26 +649,20 @@ GENERATE UNIVERSAL PRODUCT BACKDROP DESCRIPTION NOW:"""
             )
             
             if not result.generated_images:
+                logger.error("  [Vertex] API returned no images.")
                 raise RuntimeError("No images were generated")
-            
             generated_image = result.generated_images[0].image
-            logger.info("  → Background generated successfully with Imagen 4.0!")
-            logger.info(f"  → Image bytes: {len(generated_image.image_bytes)} bytes")
-            
-            # Save the generated image
+            logger.info(f"  [Vertex] Image generated: {len(generated_image.image_bytes)} bytes")
             temp_dir = self._get_temp_dir()
             output_path = str(temp_dir / f"background_{uuid.uuid4()}.png")
             generated_image.save(output_path)
-            
-            logger.info(f"  → Generated image saved: {output_path}")
+            logger.info(f"  [Vertex] Saved to temp: {output_path}")
             
             # Return the local file path
             return output_path
 
         except Exception as e:
-            logger.error(f"  → Vertex AI Imagen 4.0 generation failed!")
-            logger.error(f"  → Error: {str(e)}")
-            logger.error(f"  → Error type: {type(e).__name__}")
+            logger.error(f"  [Vertex] Imagen 4.0 generation failed: {type(e).__name__}: {str(e)}")
             return None
 
     def _save_background_to_public(self, image_path: str, user_id: str, short_id: str) -> Optional[str]:

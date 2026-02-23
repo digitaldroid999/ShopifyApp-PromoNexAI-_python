@@ -3,6 +3,7 @@
 import traceback
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from app.models import (
     BackgroundGenerationRequest,
@@ -17,13 +18,50 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/background", tags=["background"])
 
+VERTEX_UNAVAILABLE_MESSAGE = "Vertex AI is not available"
+
 
 @router.post("/generate", response_model=BackgroundGenerationResponse)
-def start_background_generation(request: BackgroundGenerationRequest) -> BackgroundGenerationResponse:
+def start_background_generation(request: BackgroundGenerationRequest):
     """
     Start an async background generation task (OpenAI prompt + Vertex Imagen).
     Returns immediately with task_id; poll GET /background/status/{task_id} for result.
+    If Vertex AI is not configured/available, returns 503 with error message for the frontend.
     """
+    # Check Vertex AI availability before starting task so frontend gets immediate response
+    if not background_generation_service.is_vertex_available():
+        logger.warning("POST /background/generate: Vertex AI is not available — returning 503")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "task_id": None,
+                "status": "unavailable",
+                "image_url": None,
+                "message": VERTEX_UNAVAILABLE_MESSAGE,
+                "error": VERTEX_UNAVAILABLE_MESSAGE,
+                "progress": None,
+                "current_step": None,
+                "created_at": None,
+            },
+        )
+    # If no manual prompt, OpenAI is required for prompt extraction
+    if not request.manual_prompt and not background_generation_service.is_openai_available():
+        logger.warning("POST /background/generate: OpenAI not available and no manual prompt — returning 503")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "task_id": None,
+                "status": "unavailable",
+                "image_url": None,
+                "message": "OpenAI is not available and no manual prompt provided",
+                "error": "OpenAI is not available and no manual prompt provided",
+                "progress": None,
+                "current_step": None,
+                "created_at": None,
+            },
+        )
     try:
         result = background_generation_service.start_background_generation_task(
             user_id=request.user_id,
