@@ -18,7 +18,7 @@ import math
 import threading
 from io import BytesIO
 from datetime import datetime
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Callable
 from pathlib import Path
 from PIL import Image, ImageFilter, ImageEnhance, ImageOps
 import cv2
@@ -27,7 +27,7 @@ import numpy as np
 
 from app.logging_config import get_logger
 from app.config import settings
-from app.utils.task_management import create_task, get_task_status, complete_task, fail_task, start_task, TaskType, TaskStatus, task_manager
+from app.utils.task_management import create_task, get_task_status, complete_task, fail_task, start_task, update_task_progress, TaskType, TaskStatus, task_manager
 
 logger = get_logger(__name__)
 
@@ -1019,7 +1019,11 @@ class ImageProcessingService:
 
             # Update task to processing
             start_task(task_id)
-            
+            update_task_progress(task_id, message="Scene2 generation started", progress=0)
+
+            def _progress_cb(msg: str, pct: int) -> None:
+                update_task_progress(task_id, message=msg, progress=pct)
+
             # Perform the actual merge (this is the synchronous method)
             result = self.merge_image_with_video(
                 product_image_url=product_image_url,
@@ -1034,6 +1038,7 @@ class ImageProcessingService:
                 add_shadow=add_shadow,
                 shadow_blur_radius=shadow_blur_radius,
                 shadow_offset=shadow_offset,
+                progress_callback=_progress_cb,
             )
             
             # Update task based on result
@@ -1103,6 +1108,7 @@ class ImageProcessingService:
                 "scene_id": task_info_dict.get('scene_id'),
                 "user_id": task_info_dict.get('user_id'),
                 "message": task_info_dict.get('message', ''),
+                "progress": task_info_dict.get('progress'),
                 "created_at": task_info_dict.get('created_at'),
                 "updated_at": task_info_dict.get('updated_at'),
                 "error_message": task_info_dict.get('error_message')
@@ -1134,7 +1140,8 @@ class ImageProcessingService:
         add_animation: bool = True,
         add_shadow: bool = True,
         shadow_blur_radius: int = 25,
-        shadow_offset: Tuple[int, int] = (15, 15)
+        shadow_offset: Tuple[int, int] = (15, 15),
+        progress_callback: Optional[Callable[[str, int], None]] = None,
     ) -> Dict[str, Any]:
         """
         Merge a product image (without background) with a background video using OpenCV.
@@ -1153,10 +1160,15 @@ class ImageProcessingService:
             add_shadow: Whether to add shadow effect to the product
             shadow_blur_radius: Blur radius for shadow (default: 25)
             shadow_offset: Shadow offset as (x, y) tuple (default: (15, 15))
+            progress_callback: Optional (message, progress_0_100) for status updates
         
         Returns:
             Dict with success, video_url (e.g. "generated_videos/{user_id}/{short_id}/scene2/{file_name}"), error
         """
+        def _report(msg: str, pct: int) -> None:
+            if progress_callback:
+                progress_callback(msg, pct)
+
         short_id = short_id or scene_id
         temp_product_path = None
         temp_video_path = None
@@ -1175,16 +1187,19 @@ class ImageProcessingService:
                        scene_id, user_id, round(scale * 100), position, duration, add_animation, add_shadow)
 
             # Step 1: Download product image
+            _report("Downloading product image...", 10)
             logger.info("[Scene2] Step 1/6: Downloading product image - started")
             print("\n📥 STEP 1/6: Downloading Product Image")
             print("-" * 80)
             logger.info("🖼️  Product image URL: %s...", product_image_url[:80])
             temp_product_path = self._download_image_from_url(product_image_url)
+            _report("Product image downloaded", 20)
             logger.info("[Scene2] Step 1/6: Downloading product image - done | path=%s", temp_product_path)
             logger.info("✅ Product image downloaded: %s", temp_product_path)
 
             # Step 2: Add shadow effect to product image using PIL
             if add_shadow:
+                _report("Adding shadow to product...", 30)
                 logger.info("[Scene2] Step 2/6: Adding shadow effect (PIL) - started")
                 print("\n✨ STEP 2/6: Adding Shadow Effect to Product Image (PIL)")
                 print("-" * 80)
@@ -1195,6 +1210,7 @@ class ImageProcessingService:
                     blur_radius=shadow_blur_radius,
                     offset=shadow_offset
                 )
+                _report("Shadow added", 40)
                 logger.info("[Scene2] Step 2/6: Adding shadow effect (PIL) - done | path=%s", temp_shadow_product_path)
                 logger.info("✅ Shadow effect added: %s", temp_shadow_product_path)
 
@@ -1203,17 +1219,21 @@ class ImageProcessingService:
             else:
                 logger.info("[Scene2] Step 2/6: Skipped (shadow disabled)")
                 product_path_for_merge = temp_product_path
+                _report("Shadow skipped", 40)
 
             # Step 3: Download background video
+            _report("Downloading background video...", 45)
             logger.info("[Scene2] Step 3/6: Downloading background video - started")
             print("\n📥 STEP 3/6: Downloading Background Video")
             print("-" * 80)
             logger.info("🎥 Background video URL: %s...", background_video_url[:80])
             temp_video_path = self._download_video_from_url(background_video_url)
+            _report("Background video downloaded", 55)
             logger.info("[Scene2] Step 3/6: Downloading background video - done | path=%s", temp_video_path)
             logger.info("✅ Background video downloaded: %s", temp_video_path)
             
             # Step 4: Merge using OpenCV
+            _report("Merging product with video (OpenCV)...", 60)
             logger.info("[Scene2] Step 4/6: Merging product with video (OpenCV) - started")
             print("\n🎨 STEP 4/6: Merging Product with Video (OpenCV Processing)")
             print("-" * 80)
@@ -1226,10 +1246,12 @@ class ImageProcessingService:
                 duration=duration,
                 add_animation=add_animation
             )
+            _report("Video merge completed", 85)
             logger.info("[Scene2] Step 4/6: Merging product with video (OpenCV) - done | path=%s", temp_output_path)
             logger.info("✅ Video merge completed: %s", temp_output_path)
 
             # Step 5: Save to public folder and build response URL
+            _report("Saving to public folder...", 90)
             public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
             if not public_base:
                 return {'success': False, 'video_url': None, 'error': 'PUBLIC_OUTPUT_BASE not configured'}
@@ -1239,6 +1261,7 @@ class ImageProcessingService:
             dest_path = out_dir / file_name
             shutil.copy2(temp_output_path, str(dest_path))
             video_url = f"/generated_video/{user_id}/{short_id}/scene2/{file_name}"
+            _report("Scene2 generation completed", 100)
             logger.info("[Scene2] Step 5/6: Saved to public folder | url=%s", video_url)
             logger.info("[Scene2] Step 6/6: Done")
 

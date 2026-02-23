@@ -94,6 +94,7 @@ class MergeVideoTaskStatusResponse(BaseModel):
     scene_id: Optional[str] = None
     user_id: Optional[str] = None
     message: Optional[str] = None
+    progress: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     error_message: Optional[str] = None
@@ -145,6 +146,7 @@ def merge_video_task_status(task_id: str) -> MergeVideoTaskStatusResponse:
         scene_id=task.get("scene_id"),
         user_id=task.get("user_id"),
         message=task.get("message"),
+        progress=task.get("progress"),
         created_at=task.get("created_at"),
         updated_at=task.get("updated_at"),
         error_message=task.get("error_message"),

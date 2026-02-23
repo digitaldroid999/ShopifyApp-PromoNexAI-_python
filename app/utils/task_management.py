@@ -44,6 +44,7 @@ class TaskManager:
                 "scene_id": kwargs.get("scene_id"),
                 "short_id": kwargs.get("short_id"),
                 "message": "",
+                "progress": None,
                 "created_at": now,
                 "updated_at": now,
                 "error_message": None,
@@ -79,6 +80,17 @@ class TaskManager:
                 self._tasks[task_id]["updated_at"] = now
                 self._tasks[task_id]["error_message"] = error_message
 
+    def update_progress(self, task_id: str, message: str = "", progress: Optional[int] = None) -> None:
+        """Update task message and/or progress (0-100) while running."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            if task_id in self._tasks:
+                if message:
+                    self._tasks[task_id]["message"] = message
+                if progress is not None:
+                    self._tasks[task_id]["progress"] = min(100, max(0, progress))
+                self._tasks[task_id]["updated_at"] = now
+
 
 task_manager = TaskManager()
 
@@ -101,3 +113,8 @@ def complete_task(task_id: str, **kwargs: Any) -> None:
 
 def fail_task(task_id: str, error_message: str = "") -> None:
     task_manager.fail(task_id, error_message)
+
+
+def update_task_progress(task_id: str, message: str = "", progress: Optional[int] = None) -> None:
+    """Update task message and/or progress (0-100) for polling clients."""
+    task_manager.update_progress(task_id, message=message, progress=progress)
