@@ -2,15 +2,34 @@
 PostgreSQL access for Prisma schema (shorts, video_scenes, audio_info).
 
 Uses DATABASE_URL from config. Tables: shorts, video_scenes, audio_info.
+Prisma may add query params (e.g. schema=...) that psycopg2 does not support; we strip those.
 """
 
 import json
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from app.config import settings
 from app.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Query parameters to strip from DATABASE_URL (Prisma-specific; psycopg2 rejects them)
+_DSN_STRIP_PARAMS = frozenset({"schema", "schema_name"})
+
+
+def _dsn_for_psycopg2(url: str) -> str:
+    """Remove query parameters that psycopg2/libpq does not accept (e.g. schema)."""
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    filtered = {k: v for k, v in qs.items() if k.lower() not in _DSN_STRIP_PARAMS}
+    if len(filtered) == len(qs):
+        return url
+    new_query = urlencode(filtered, doseq=True)
+    parts = (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
+    return urlunparse(parts)
 
 
 def _get_connection():
@@ -18,7 +37,8 @@ def _get_connection():
     if not settings.DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set; cannot connect to PostgreSQL")
     import psycopg2
-    return psycopg2.connect(settings.DATABASE_URL)
+    dsn = _dsn_for_psycopg2(settings.DATABASE_URL)
+    return psycopg2.connect(dsn)
 
 
 def fetch_video_scenes(short_id: str) -> List[Dict[str, Any]]:
