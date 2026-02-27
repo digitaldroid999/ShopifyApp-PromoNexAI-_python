@@ -32,7 +32,7 @@ from app.utils.task_management import (
     TaskType
 )
 from app.models import TaskStatus
-from app.config import settings
+from app.config import settings, get_ffmpeg_bin
 
 logger = get_logger(__name__)
 
@@ -710,7 +710,7 @@ class MergingService:
                         f.write(f"file '{video_file}'\n")
                 
                 cmd = [
-                    'ffmpeg', '-y',
+                    get_ffmpeg_bin(), '-y',
                     '-f', 'concat',
                     '-safe', '0',
                     '-i', file_list_path,
@@ -726,7 +726,7 @@ class MergingService:
                         logger.info(f"   Adding silent audio to scene {i}...")
                         normalized_path = os.path.join(temp_dir, f"normalized_{i}.mp4")
                         norm_cmd = [
-                            'ffmpeg', '-y',
+                            get_ffmpeg_bin(), '-y',
                             '-i', video_file,
                             '-f', 'lavfi',
                             '-i', 'anullsrc=r=48000:cl=stereo',
@@ -752,7 +752,7 @@ class MergingService:
                 
                 filter_complex = f"{''.join(filter_parts)}concat=n={len(normalized_videos)}:v=1:a=1[outv][outa]"
                 
-                cmd = ['ffmpeg', '-y']
+                cmd = [get_ffmpeg_bin(), '-y']
                 
                 # Add all normalized input files
                 for video_file in normalized_videos:
@@ -779,7 +779,7 @@ class MergingService:
                 
                 filter_complex = f"{''.join(filter_parts)}concat=n={len(video_files)}:v=1:a=1[outv][outa]"
                 
-                cmd = ['ffmpeg', '-y']
+                cmd = [get_ffmpeg_bin(), '-y']
                 
                 # Add all input files
                 for video_file in video_files:
@@ -945,7 +945,7 @@ class MergingService:
                 
                 if len(music_files) == 1:
                     cmd = [
-                        'ffmpeg', '-y',
+                        get_ffmpeg_bin(), '-y',
                         '-i', video_path,
                         '-i', audio_path,
                         '-i', music_files[0],
@@ -960,7 +960,7 @@ class MergingService:
                     ]
                 else:
                     cmd = [
-                        'ffmpeg', '-y',
+                        get_ffmpeg_bin(), '-y',
                         '-i', video_path,
                         '-i', audio_path,
                         '-i', music_files[0], '-i', music_files[1],
@@ -977,7 +977,7 @@ class MergingService:
             else:
                 logger.info("Merging without background music")
                 cmd = [
-                    'ffmpeg', '-y',
+                    get_ffmpeg_bin(), '-y',
                     '-i', video_path, '-i', audio_path,
                     '-c:v', 'copy',
                     '-filter_complex',
@@ -1029,7 +1029,7 @@ class MergingService:
                 logger.info(f"Simple merge with background music: {len(music_files)} track(s)")
                 if len(music_files) == 1:
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', audio_path, '-i', music_files[0],
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path, '-i', music_files[0],
                         '-c:v', 'copy', '-filter_complex',
                         f'[0:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=0.3[vid_audio];'
                         f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=1.0[voice_audio];'
@@ -1039,7 +1039,7 @@ class MergingService:
                     ]
                 else:
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path,
                         '-i', music_files[0], '-i', music_files[1],
                         '-c:v', 'copy', '-filter_complex',
                         '[2:a][3:a]concat=n=2:v=0:a=1[bg_raw];'
@@ -1051,7 +1051,7 @@ class MergingService:
                     ]
             else:
                 cmd = [
-                    'ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                    get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path,
                     '-c:v', 'copy', '-filter_complex',
                     f'[0:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=0.5[vid_audio];'
                     f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=1.0[voice_audio];'
@@ -1100,7 +1100,7 @@ class MergingService:
                 logger.info(f"Voice-priority merge with background music: {len(music_files)} track(s)")
                 if len(music_files) == 1:
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', audio_path, '-i', music_files[0],
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path, '-i', music_files[0],
                         '-filter_complex',
                         f'[0:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=0.15[vid_audio];'
                         f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=1.0[voice];'
@@ -1110,7 +1110,7 @@ class MergingService:
                     ]
                 else:
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path,
                         '-i', music_files[0], '-i', music_files[1],
                         '-filter_complex',
                         '[2:a][3:a]concat=n=2:v=0:a=1[bg_raw];'
@@ -1123,7 +1123,7 @@ class MergingService:
             else:
                 logger.info("Voice-priority merge: video sound + voice (no background music)")
                 cmd = [
-                    'ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                    get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path,
                     '-c:v', 'copy', '-filter_complex',
                     f'[0:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=0.2[vid_audio];'
                     f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=1.0[voice_audio];'
@@ -1177,7 +1177,7 @@ class MergingService:
                 logger.info(f"Basic merge with background music: {len(music_files)} track(s)")
                 if len(music_files) == 1:
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', audio_path, '-i', music_files[0],
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path, '-i', music_files[0],
                         '-filter_complex',
                         f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=1.0[voice];'
                         f'[2:a]atrim=0:{vd},asetpts=PTS-STARTPTS,volume=0.4[music];'
@@ -1187,7 +1187,7 @@ class MergingService:
                     ]
                 else:
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path,
                         '-i', music_files[0], '-i', music_files[1],
                         '-filter_complex',
                         '[2:a][3:a]concat=n=2:v=0:a=1[bg_raw];'
@@ -1200,7 +1200,7 @@ class MergingService:
             else:
                 logger.info("Basic merge: voice only (no background music)")
                 cmd = [
-                    'ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                    get_ffmpeg_bin(), '-y', '-i', video_path, '-i', audio_path,
                     '-filter_complex',
                     f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd}[out]',
                     '-map', '0:v', '-map', '[out]', '-c:v', 'copy', '-c:a', 'aac',
@@ -1259,7 +1259,7 @@ class MergingService:
                 if len(music_files) == 1:
                     logger.info(f"Merging video audio + 1 background music track")
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', music_files[0],
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', music_files[0],
                         '-filter_complex',
                         f'[0:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=0.2[vid_audio];'
                         f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,volume=0.4[bg_music];'
@@ -1270,7 +1270,7 @@ class MergingService:
                 else:
                     logger.info(f"Merging video audio + 2 background music tracks")
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path,
+                        get_ffmpeg_bin(), '-y', '-i', video_path,
                         '-i', music_files[0], '-i', music_files[1],
                         '-filter_complex',
                         '[1:a][2:a]concat=n=2:v=0:a=1[bg_raw];'
@@ -1284,7 +1284,7 @@ class MergingService:
                 if len(music_files) == 1:
                     logger.info(f"Adding 1 background music track to silent video")
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path, '-i', music_files[0],
+                        get_ffmpeg_bin(), '-y', '-i', video_path, '-i', music_files[0],
                         '-filter_complex',
                         f'[1:a]atrim=0:{vd},asetpts=PTS-STARTPTS,apad=whole_dur={vd},volume=0.4[out]',
                         '-map', '0:v', '-map', '[out]', '-c:v', 'copy', '-c:a', 'aac',
@@ -1293,7 +1293,7 @@ class MergingService:
                 else:
                     logger.info(f"Adding 2 background music tracks to silent video")
                     cmd = [
-                        'ffmpeg', '-y', '-i', video_path,
+                        get_ffmpeg_bin(), '-y', '-i', video_path,
                         '-i', music_files[0], '-i', music_files[1],
                         '-filter_complex',
                         '[1:a][2:a]concat=n=2:v=0:a=1[bg_raw];'
@@ -1347,7 +1347,7 @@ class MergingService:
             font_name = self._get_subtitle_font()
             
             cmd = [
-                'ffmpeg', '-y',
+                get_ffmpeg_bin(), '-y',
                 '-i', video_path,
                 '-vf', f"subtitles='{escaped_srt_path}':force_style='FontSize=16,Bold=1,FontName={font_name},PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=1,Shadow=1,BackColour=&H000000&'",
                 '-c:a', 'copy',  # Copy audio codec

@@ -26,7 +26,7 @@ import numpy as np
 
 
 from app.logging_config import get_logger
-from app.config import settings
+from app.config import settings, get_ffmpeg_bin
 from app.utils.task_management import create_task, get_task_status, complete_task, fail_task, start_task, update_task_progress, TaskType, TaskStatus, task_manager
 
 logger = get_logger(__name__)
@@ -59,10 +59,11 @@ class ImageProcessingService:
         return temp_dir
     
     def _check_ffmpeg(self):
-        """Check if FFmpeg is available."""
+        """Check if FFmpeg is available (uses FFMPEG_PATH from env if set)."""
+        ffmpeg_bin = get_ffmpeg_bin()
         try:
             result = subprocess.run(
-                ['ffmpeg', '-version'],
+                [ffmpeg_bin, '-version'],
                 capture_output=True,
                 timeout=5
             )
@@ -71,7 +72,10 @@ class ImageProcessingService:
             else:
                 logger.warning("⚠️  FFmpeg check returned non-zero exit code")
         except FileNotFoundError:
-            logger.error("❌ FFmpeg not found! Video merge will fail. Install from: https://ffmpeg.org/download.html")
+            logger.error(
+                "❌ FFmpeg not found! Video merge will fail. Install from: https://ffmpeg.org/download.html "
+                "Or set FFMPEG_PATH in .env to the install folder or full path to ffmpeg."
+            )
         except Exception as e:
             logger.warning(f"⚠️  Could not check FFmpeg availability: {e}")
 
@@ -1689,7 +1693,7 @@ class ImageProcessingService:
         try:
             # FFmpeg command for high-quality H.264 encoding at 1920x1080
             cmd = [
-                'ffmpeg',
+                get_ffmpeg_bin(),
                 '-i', input_path,
                 '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',  # Ensure 1920x1080
                 '-c:v', 'libx264',          # H.264 video codec

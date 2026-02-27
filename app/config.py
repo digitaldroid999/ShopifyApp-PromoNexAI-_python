@@ -74,6 +74,21 @@ class Settings:
     )
 
 
+def get_ffmpeg_bin() -> str:
+    """Return path to ffmpeg executable. Use FFMPEG_PATH if set, otherwise 'ffmpeg' (expects it on PATH)."""
+    path = os.getenv("FFMPEG_PATH", "").strip()
+    if path:
+        # Allow directory (e.g. C:\\ffmpeg\\bin) or full path to executable
+        if os.path.isdir(path):
+            path = os.path.join(path, "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        return path
+    return "ffmpeg"
+
+
 settings = Settings()
+# FFmpeg (optional custom path when not on system PATH)
+settings.FFMPEG_PATH = os.getenv("FFMPEG_PATH", "").strip()
+settings.get_ffmpeg_bin = get_ffmpeg_bin
+
 # Derived paths under PUBLIC_OUTPUT_BASE
 settings.COMPOSITED_IMAGES_OUTPUT_DIR = os.path.normpath(os.path.join(settings.PUBLIC_OUTPUT_BASE, "composited_images"))
