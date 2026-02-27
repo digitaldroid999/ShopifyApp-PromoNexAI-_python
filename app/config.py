@@ -72,6 +72,8 @@ class Settings:
         "PUBLIC_OUTPUT_BASE",
         os.path.normpath(os.path.join(_project_root, "..", "ShopifyApp-PromoNexAI-", "public")),
     )
+    # Optional: base URL for the app (e.g. https://shopify.promonexai.com) when resolving path-only music URLs like /Music/Pop/....
+    PUBLIC_APP_URL: Optional[str] = os.getenv("PUBLIC_APP_URL", "").strip() or None
 
 
 def get_ffmpeg_bin() -> str:

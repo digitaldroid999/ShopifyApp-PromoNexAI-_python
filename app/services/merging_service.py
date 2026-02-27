@@ -17,6 +17,7 @@ import httpx
 import subprocess
 import json
 import shutil
+import urllib.parse
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -443,28 +444,54 @@ class MergingService:
 
     def _download_music_from_url(self, download_url: str, temp_dir: str, suggested_filename: Optional[str] = None) -> Optional[str]:
         """
-        Download background music file from an external URL (e.g. musicInfo.track1.downloadUrl).
-        
-        Args:
-            download_url: Full URL to the music file (e.g. AudioBlocks CDN)
-            temp_dir: Temporary directory to save the downloaded file
-            suggested_filename: Optional filename (e.g. from track name); extension will be preserved or default to .mp3
-            
-        Returns:
-            Path to temporary music file, or None if download fails
+        Download background music from a URL or a path. Uses the same local-then-HTTP pattern as
+        _download_audio and _download_videos: path under PUBLIC_OUTPUT_BASE is tried first, then HTTP.
         """
         try:
-            url = (download_url or "").strip()
-            if not url:
+            # Same normalization as _download_audio and _download_videos (strip, lstrip "/")
+            path_stripped = (download_url or "").strip().lstrip("/")
+            if not path_stripped:
                 logger.error("Background music download URL is empty")
                 return None
-            # Ensure URL has a scheme so httpx doesn't raise "missing protocol"
+
+            # Local path under PUBLIC_OUTPUT_BASE (same pattern as scene videos and audio)
+            if not (path_stripped.startswith("http://") or path_stripped.startswith("https://")):
+                # Decode for filesystem (e.g. %20 -> space); prevent path traversal
+                path_decoded = urllib.parse.unquote(path_stripped)
+                if ".." in path_decoded or path_decoded.startswith("/"):
+                    logger.error("Invalid background music path (contains '..' or absolute)")
+                    return None
+                public_base = Path(settings.PUBLIC_OUTPUT_BASE).resolve()
+                local_path = (public_base / path_decoded).resolve()
+                if not str(local_path).startswith(str(public_base)):
+                    logger.error("Background music path escapes PUBLIC_OUTPUT_BASE")
+                    return None
+                if local_path.is_file():
+                    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False, dir=temp_dir) as temp_file:
+                        shutil.copy2(local_path, temp_file.name)
+                        logger.info(f"Copied local background music to {temp_file.name} (same as scene/audio)")
+                        return temp_file.name
+                # Not on disk: try app base URL if configured (e.g. path /Music/Pop/... served by app)
+                base_url = getattr(settings, "PUBLIC_APP_URL", None) or None
+                if base_url:
+                    url = base_url.rstrip("/") + "/" + path_stripped
+                    logger.info(f"Downloading background music from app URL: {url}")
+                else:
+                    logger.error(
+                        f"Local background music file not found: {local_path} "
+                        "(same resolution as scene videos/audio under PUBLIC_OUTPUT_BASE). Set PUBLIC_APP_URL to fetch by HTTP."
+                    )
+                    return None
+            else:
+                url = path_stripped
+
+            # Full URL: ensure scheme, then download (same as HTTP branch in _download_videos)
             if url.startswith("//"):
                 url = "https:" + url
             elif not (url.startswith("http://") or url.startswith("https://")):
                 url = "https://" + url
-            logger.info(f"Downloading background music from external URL (length={len(url)})")
-            # Many CDNs (e.g. AudioBlocks/CloudFront) return 403 for non-browser User-Agents
+
+            logger.info(f"Downloading background music from URL (length={len(url)})")
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "audio/mpeg,audio/*,*/*",
