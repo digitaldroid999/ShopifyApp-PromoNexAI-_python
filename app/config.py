@@ -87,10 +87,27 @@ def get_ffmpeg_bin() -> str:
     return "ffmpeg"
 
 
+def get_ffprobe_bin() -> str:
+    """Return path to ffprobe (same directory as ffmpeg). Required for video duration/audio detection."""
+    path = os.getenv("FFMPEG_PATH", "").strip()
+    if path:
+        if os.path.isdir(path):
+            path = os.path.join(path, "ffprobe.exe" if os.name == "nt" else "ffprobe")
+        else:
+            # Path is to ffmpeg executable; use same dir for ffprobe
+            dir_path = os.path.dirname(path)
+            path = os.path.join(dir_path, "ffprobe.exe" if os.name == "nt" else "ffprobe")
+        return path
+    return "ffprobe"
+
+
 settings = Settings()
 # FFmpeg (optional custom path when not on system PATH)
 settings.FFMPEG_PATH = os.getenv("FFMPEG_PATH", "").strip()
 settings.get_ffmpeg_bin = get_ffmpeg_bin
+settings.get_ffprobe_bin = get_ffprobe_bin
+# Default final video length when short has no duration set (seconds)
+DEFAULT_FINAL_VIDEO_DURATION = 24
 
 # Derived paths under PUBLIC_OUTPUT_BASE
 settings.COMPOSITED_IMAGES_OUTPUT_DIR = os.path.normpath(os.path.join(settings.PUBLIC_OUTPUT_BASE, "composited_images"))

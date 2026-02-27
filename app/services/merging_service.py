@@ -33,7 +33,7 @@ from app.utils.task_management import (
     TaskType
 )
 from app.models import TaskStatus
-from app.config import settings, get_ffmpeg_bin
+from app.config import settings, get_ffmpeg_bin, get_ffprobe_bin, DEFAULT_FINAL_VIDEO_DURATION
 
 logger = get_logger(__name__)
 
@@ -269,6 +269,21 @@ class MergingService:
                 logger.info(f"[STEP 5.2] ⚠ Skipping subtitles (no subtitle data available)")
             logger.info(f"[STEP 5] ✓ Completed processing final video")
 
+            # Step 5.5: Ensure final video duration (e.g. 24s when not set)
+            duration_step_temp_path = None
+            try:
+                short_meta = db_fetch_short_metadata(short_id) or {}
+                target_duration = short_meta.get("duration")
+                if target_duration is None or (isinstance(target_duration, (int, float)) and target_duration <= 0):
+                    target_duration = DEFAULT_FINAL_VIDEO_DURATION
+                target_duration = float(target_duration)
+                path_before = final_video_path
+                final_video_path = self._ensure_final_duration(final_video_path, target_duration)
+                if final_video_path != path_before:
+                    duration_step_temp_path = path_before
+            except Exception as e:
+                logger.warning(f"[STEP 5.5] Could not enforce final duration: {e}")
+
             update_task_progress(task_id, "Uploading final video", 70)
 
             # Step 7: Upload final video
@@ -289,6 +304,8 @@ class MergingService:
             # Clean up temporary files
             logger.info(f"[STEP 8] Cleaning up temporary files...")
             temp_files = video_files + [merged_video_path, final_video_path]
+            if duration_step_temp_path:
+                temp_files.append(duration_step_temp_path)
             if audio_file:
                 temp_files.append(audio_file)
             
@@ -867,10 +884,10 @@ class MergingService:
             raise
 
     def _check_video_has_audio(self, video_path: str) -> bool:
-        """Check if video file has an audio stream using FFprobe."""
+        """Check if video file has an audio stream using FFprobe (uses same path as ffmpeg)."""
         try:
             cmd = [
-                'ffprobe',
+                get_ffprobe_bin(),
                 '-v', 'quiet',
                 '-select_streams', 'a',
                 '-show_entries', 'stream=codec_type',
@@ -899,10 +916,10 @@ class MergingService:
             return False
 
     def _get_video_duration(self, video_path: str) -> float:
-        """Get video duration in seconds using FFmpeg (returns float for precise timing)."""
+        """Get video duration in seconds using ffprobe (same path as ffmpeg)."""
         try:
             cmd = [
-                'ffprobe',
+                get_ffprobe_bin(),
                 '-v', 'quiet',
                 '-show_entries', 'format=duration',
                 '-of', 'csv=p=0',
@@ -1423,6 +1440,56 @@ class MergingService:
                 logger.warning(
                     f"Failed to clean up temporary directory: {cleanup_error}")
             raise
+
+    def _ensure_final_duration(self, video_path: str, target_seconds: float) -> str:
+        """
+        Trim or pad the video to exactly target_seconds. Returns path to the result (new temp file if changed).
+        Used so final video length is consistent (e.g. 24s when duration is not set).
+        """
+        try:
+            current = self._get_video_duration(video_path)
+            target = float(target_seconds)
+            if target <= 0:
+                return video_path
+            if abs(current - target) < 0.2:
+                logger.info(f"Final duration already ~{current:.1f}s (target {target}s), no change")
+                return video_path
+
+            temp_dir = tempfile.mkdtemp()
+            out_path = os.path.join(temp_dir, "final_duration.mp4")
+
+            if current > target:
+                # Trim to target
+                logger.info(f"Trimming video from {current:.1f}s to {target}s")
+                cmd = [
+                    get_ffmpeg_bin(), '-y', '-i', video_path,
+                    '-t', str(target), '-c', 'copy',
+                    out_path
+                ]
+            else:
+                # Pad: hold last frame and pad audio to target
+                pad_sec = target - current
+                logger.info(f"Padding video from {current:.1f}s to {target}s (+{pad_sec:.1f}s)")
+                cmd = [
+                    get_ffmpeg_bin(), '-y', '-i', video_path,
+                    '-filter_complex',
+                    f'[0:v]tpad=stop_mode=clone:stop_duration={pad_sec}[v];'
+                    f'[0:a]apad=whole_dur={target}[a]',
+                    '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'aac',
+                    out_path
+                ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                logger.warning(f"Ensure final duration failed: {result.stderr}, returning original")
+                return video_path
+            if not os.path.exists(out_path):
+                return video_path
+            logger.info(f"Final video duration set to {target}s: {out_path}")
+            return out_path
+        except Exception as e:
+            logger.warning(f"_ensure_final_duration failed: {e}, returning original path")
+            return video_path
 
     def _get_subtitle_font(self) -> str:
         """Get appropriate font for subtitles based on system."""
