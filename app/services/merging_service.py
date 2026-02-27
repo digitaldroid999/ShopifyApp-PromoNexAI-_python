@@ -454,14 +454,23 @@ class MergingService:
             Path to temporary music file, or None if download fails
         """
         try:
-            logger.info(f"Downloading background music from external URL (length={len(download_url)})")
+            url = (download_url or "").strip()
+            if not url:
+                logger.error("Background music download URL is empty")
+                return None
+            # Ensure URL has a scheme so httpx doesn't raise "missing protocol"
+            if url.startswith("//"):
+                url = "https:" + url
+            elif not (url.startswith("http://") or url.startswith("https://")):
+                url = "https://" + url
+            logger.info(f"Downloading background music from external URL (length={len(url)})")
             # Many CDNs (e.g. AudioBlocks/CloudFront) return 403 for non-browser User-Agents
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "audio/mpeg,audio/*,*/*",
             }
             with httpx.Client(timeout=DOWNLOAD_TIMEOUT) as client:
-                response = client.get(download_url, headers=headers)
+                response = client.get(url, headers=headers)
                 response.raise_for_status()
                 content = response.content
                 content_disposition = response.headers.get("content-disposition")
@@ -484,7 +493,7 @@ class MergingService:
                     else:
                         music_filename = "track.mp3"
                 else:
-                    path_part = download_url.split("?")[0].rstrip("/")
+                    path_part = url.split("?")[0].rstrip("/")
                     music_filename = os.path.basename(path_part) or "track.mp3"
             music_filename = music_filename[:200]
             temp_music_path = os.path.join(temp_dir, music_filename)
