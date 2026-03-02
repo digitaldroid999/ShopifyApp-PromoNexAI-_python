@@ -134,10 +134,11 @@ class MergingService:
             logger.info(f"[STEP 1.2] Fetching audio data for short_id: {short_id}")
             audio_data = self._fetch_audio_data(short_id)
             if audio_data:
-                logger.info(f"[STEP 1.2] ✓ Audio data found: url={audio_data.get('generated_audio_url', 'N/A')[:80]}..., "
+                url_val = audio_data.get('generated_audio_url') or 'N/A'
+                logger.info(f"[STEP 1.2] ✓ Audio data found: url={str(url_val)[:80]}..., "
                           f"has_subtitles={bool(audio_data.get('subtitles'))}, status={audio_data.get('status')}")
             else:
-                logger.info(f"[STEP 1.2] ⚠ No audio data found for this short")
+                logger.info(f"[STEP 1.2] ⚠ No audio data found for this short (skipping audio merge)")
             logger.info(f"[STEP 1] ✓ Completed fetching data")
 
             update_task_progress(task_id, "Downloading videos and audio", 20)
