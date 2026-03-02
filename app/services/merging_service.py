@@ -10,6 +10,7 @@ This module provides functionality for:
 
 import os
 import re
+import time
 import uuid
 import threading
 import tempfile
@@ -1555,17 +1556,32 @@ class MergingService:
             return "00:00:00,000"
 
     def _upload_final_video(self, video_path: str, short_id: str, task_id: str, user_id: str) -> str:
-        """Save final video to public folder (Prisma/local). Returns relative URL for DB (e.g. /final_videos/user_id/short_id/final.mp4)."""
+        """Save final video to public folder. Uses final_{timestamp}.mp4; clears folder first, then copies."""
         try:
             public_base = getattr(settings, "PUBLIC_OUTPUT_BASE", None)
             if not public_base:
                 raise Exception("PUBLIC_OUTPUT_BASE not configured")
             out_dir = os.path.join(public_base, "final_videos", user_id, short_id)
+
+            # Remove all existing files in the folder first
+            if os.path.isdir(out_dir):
+                for name in os.listdir(out_dir):
+                    path = os.path.join(out_dir, name)
+                    if os.path.isfile(path):
+                        os.remove(path)
+                        logger.debug(f"Removed existing file: {path}")
+                    else:
+                        shutil.rmtree(path)
+                        logger.debug(f"Removed existing dir: {path}")
             os.makedirs(out_dir, exist_ok=True)
-            out_path = os.path.join(out_dir, "final.mp4")
+
+            # Unique filename using timestamp so each merge has a distinct URL
+            timestamp = int(time.time())
+            filename = f"final_{timestamp}.mp4"
+            out_path = os.path.join(out_dir, filename)
             shutil.copy2(video_path, out_path)
-            # Return relative URL for storage in shorts.final_video_url (leading slash for frontend)
-            relative_url = f"/final_videos/{user_id}/{short_id}/final.mp4"
+
+            relative_url = f"/final_videos/{user_id}/{short_id}/{filename}"
             logger.info(f"Saved final video to {out_path}, relative URL: {relative_url}")
             return relative_url
         except Exception as e:
