@@ -158,9 +158,11 @@ def start_finalize_short(request: FinalizeShortRequest) -> FinalizeShortResponse
     and `final_video_url` when status is `completed`.
     """
     try:
+        include_subtitles = request.include_subtitles if request.include_subtitles is not None else True
         result = merging_service.start_finalize_short_task(
             user_id=request.user_id,
             short_id=request.short_id,
+            include_subtitles=include_subtitles,
         )
         # Build response from result + request (task store may not be updated yet)
         task_id = result["task_id"]

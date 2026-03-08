@@ -55,7 +55,8 @@ class MergingService:
     def start_finalize_short_task(
         self,
         user_id: str,
-        short_id: str
+        short_id: str,
+        include_subtitles: bool = True,
     ) -> Dict[str, Any]:
         """
         Start the finalization process for a short video.
@@ -63,6 +64,7 @@ class MergingService:
         Args:
             user_id: The user's UUID
             short_id: The short's UUID
+            include_subtitles: If True, burn subtitles when available; if False, do not show subtitles even if in DB.
 
         Returns:
             Dict containing task information
@@ -78,7 +80,7 @@ class MergingService:
             # Start task in background thread
             thread = threading.Thread(
                 target=self._finalize_short_worker,
-                args=(task_id, user_id, short_id),
+                args=(task_id, user_id, short_id, include_subtitles),
                 daemon=True
             )
 
@@ -104,12 +106,15 @@ class MergingService:
         self,
         task_id: str,
         user_id: str,
-        short_id: str
+        short_id: str,
+        include_subtitles: bool = True,
     ):
         """Background worker for finalizing shorts."""
         try:
             logger.info("=" * 80)
-            logger.info(f"[MERGE FLOW] Starting merge process for short_id: {short_id}, task_id: {task_id}")
+            logger.info(
+                f"[MERGE FLOW] Starting merge process for short_id: {short_id}, task_id: {task_id}, include_subtitles: {include_subtitles}"
+            )
             logger.info("=" * 80)
             
             # Start task
@@ -249,8 +254,8 @@ class MergingService:
             logger.info(f"[STEP 5] Processing final video (subtitles)...")
             final_video_path = merged_video_path
 
-            # Step 6: Add subtitles if available
-            if audio_data and audio_data.get('subtitles'):
+            # Step 6: Add subtitles only if requested and available (can skip even when DB has subtitles)
+            if include_subtitles and audio_data and audio_data.get('subtitles'):
                 logger.info(f"[STEP 5.2] Embedding subtitles into video...")
                 try:
                     subtitle_count = len(audio_data.get('subtitles', []))
@@ -267,6 +272,8 @@ class MergingService:
                     logger.warning(
                         f"[STEP 5.2] ⚠ Failed to embed subtitles, continuing without them: {subtitle_error}")
                     # Continue with the video without subtitles
+            elif not include_subtitles:
+                logger.info(f"[STEP 5.2] Skipping subtitles (include_subtitles=false, do not show even if in DB)")
             else:
                 logger.info(f"[STEP 5.2] ⚠ Skipping subtitles (no subtitle data available)")
             logger.info(f"[STEP 5] ✓ Completed processing final video")
