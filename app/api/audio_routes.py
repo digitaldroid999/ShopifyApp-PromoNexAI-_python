@@ -9,8 +9,11 @@ from app.models import (
     AudioScriptGenerationResponse,
     AudioGenerationRequest,
     AudioGenerationResponse,
+    TestAudioRequest,
+    TestAudioResponse,
 )
 from app.services.audio_generation_service import audio_generation_service
+from app.services.test_audio_service import test_audio_service
 from app.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -43,4 +46,19 @@ def generate_audio(request: AudioGenerationRequest) -> AudioGenerationResponse:
         return audio_generation_service.generate_audio(request)
     except Exception as e:
         logger.error(f"Audio generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/test-audio", response_model=TestAudioResponse)
+def get_test_audio(request: TestAudioRequest) -> TestAudioResponse:
+    """
+    Get or generate a short test audio sample for a voice and language.
+    Uses a fixed sample sentence per language. Results are cached in MongoDB;
+    if a sample already exists for (voice_id, language), the cached audio_url is returned.
+    Audio is saved under public/generated_audio/test_audios/{user_id}/{voice_id}_{language}.mp3.
+    """
+    try:
+        return test_audio_service.get_test_audio(request)
+    except Exception as e:
+        logger.error(f"Test audio failed: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
