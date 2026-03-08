@@ -60,7 +60,20 @@ class TestAudioService:
     def _get_test_text(self, language: str) -> str:
         """Get appropriate test text for the given language"""
         return self.test_texts.get(language, self.test_texts['en-US'])
-    
+
+    def _build_audio_url_for_client(self, path: str) -> str:
+        """Build URL for client: full URL if PUBLIC_APP_URL set, else path with leading slash (use with API base URL)."""
+        if not path:
+            return ""
+        path = path.strip().lstrip("/")
+        if not path:
+            return ""
+        path_with_slash = "/" + path
+        public_base = getattr(settings, "PUBLIC_APP_URL", None)
+        if public_base:
+            return (public_base.rstrip("/") + path_with_slash)
+        return path_with_slash
+
     def _validate_language(self, language: str) -> bool:
         """Validate if the language is supported"""
         return language in self.supported_languages
@@ -198,14 +211,14 @@ class TestAudioService:
             # Check if test audio already exists
             cached_audio = self._get_cached_audio(request.voice_id, request.language)
             if cached_audio:
+                stored_path = cached_audio.get("audio_url", "")
                 logger.info(
-                    "test_audio cache hit | voice_id=%s language=%s audio_url=%s",
-                    request.voice_id, request.language, cached_audio.get('audio_url', '')[:80],
+                    "test_audio cache hit | voice_id=%s language=%s stored_path=%s",
+                    request.voice_id, request.language, (stored_path or "")[:80],
                 )
                 test_text = self._get_test_text(request.language)
-                audio_url = cached_audio["audio_url"]
-                if audio_url and not audio_url.startswith("/"):
-                    audio_url = "/" + audio_url
+                audio_url = self._build_audio_url_for_client(stored_path)
+                logger.info("test_audio returning audio_url for client | url=%s", (audio_url or "")[:120])
                 resp = TestAudioResponse(
                     voice_id=request.voice_id,
                     language=request.language,
@@ -221,7 +234,8 @@ class TestAudioService:
 
             logger.info("test_audio cache miss | voice_id=%s language=%s generating", request.voice_id, request.language)
             # Generate new test audio (saves to public folder and MongoDB inside _generate_test_audio)
-            audio_url = self._generate_test_audio(request.voice_id, request.language, request.user_id)
+            raw_url = self._generate_test_audio(request.voice_id, request.language, request.user_id)
+            audio_url = self._build_audio_url_for_client(raw_url) if raw_url else ""
             if not audio_url:
                 logger.warning("test_audio generation failed | voice_id=%s language=%s", request.voice_id, request.language)
                 test_text = self._get_test_text(request.language)
@@ -251,7 +265,7 @@ class TestAudioService:
             )
             logger.info(
                 "test_audio response | status=generated voice_id=%s audio_url=%s",
-                request.voice_id, audio_url[:80] if audio_url else "",
+                request.voice_id, (audio_url or "")[:120],
             )
             return resp
 

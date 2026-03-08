@@ -8,9 +8,11 @@ Or:
     python -m uvicorn main:app --reload
 """
 
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
@@ -63,6 +65,14 @@ def create_app() -> FastAPI:
     # Image composite: save to Shopify app public folder, return /composited_images/{name}
     from app.api.composite_routes import router as composite_router
     app.include_router(composite_router)
+
+    # Serve generated audio (test audios, short audio) so frontend can load audio_url from this API origin
+    generated_audio_dir = os.path.join(settings.PUBLIC_OUTPUT_BASE, "generated_audio")
+    if os.path.isdir(generated_audio_dir):
+        app.mount("/generated_audio", StaticFiles(directory=generated_audio_dir), name="generated_audio")
+        logger.info("Serving static files from %s at /generated_audio", generated_audio_dir)
+    else:
+        logger.warning("Generated audio dir not found, test/short audio URLs may 404: %s", generated_audio_dir)
 
     # Audio: script generation and audio generation (save to public/generated_audio/{user_id}/{short_id}/)
     from app.api.audio_routes import router as audio_router
